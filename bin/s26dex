@@ -1,0 +1,478 @@
+#!/usr/bin/env bash
+# s26dex — Galaxy S26 + Samsung DeX 에서 Windows 앱을 고성능으로 실행
+# 구성: Termux(네이티브) + Termux:X11 + Hangover(Wine 11 + FEX/Box64) + DXVK/VKD3D-Proton
+set -o pipefail
+
+_self="$(readlink -f "${BASH_SOURCE[0]}")"
+S26_ROOT="$(cd "$(dirname "$_self")/.." && pwd)"
+# shellcheck source=../lib/common.sh
+. "$S26_ROOT/lib/common.sh"
+
+usage() {
+  cat <<'EOF'
+사용법: s26dex <명령> [옵션]
+
+  start   [--game] [--render PCT | --res WxH | --native] [--fullscreen]
+          [--shell desktop|openbox|none]
+          X 서버(Termux:X11) + 오디오 + Wine 데스크톱을 띄움 (DeX 창으로 열림)
+            --game        게임 모드: 전체화면, 마우스 캡처, 스캔코드, 메타키 캡처
+            --render 75   네이티브 해상도의 75%로 렌더 후 확대 (GPU 부하↓)
+            --res 1600x900  고정 해상도
+  run     [옵션] <파일.exe|.msi|.bat|.lnk> [인자...]
+            -p, --profile compat|balanced|performance|extreme  (기본: performance)
+            --emu32 box64|fex     32비트 x86 에뮬레이터 (기본 box64)
+            --cores all|big|prime|0-7   CPU 코어 고정 (기본: 프로필 값)
+            --fps N               프레임 제한 (발열 억제 → 지속 성능↑)
+            --d3d dxvk|wined3d    Direct3D 백엔드 (기본 dxvk)
+            --gl zink|llvmpipe    OpenGL 백엔드
+            --hud | --mangohud    FPS/프레임타임 오버레이
+            --no-desktop          Wine 가상 데스크톱 밖에서 실행
+            --log                 Wine 로그를 파일로 저장
+            --dry-run             실행 없이 환경/명령만 출력
+  info    <exe>          실행 파일 아키텍처(x64/x86/ARM64) 확인
+  dxvk    install|deploy|status   DXVK + VKD3D-Proton 설치/적용
+  detect                 GPU/Vulkan 드라이버/CPU 클러스터 재탐지
+  doctor                 성능 저하 원인 점검 (cpuset, 드라이버, 설정)
+  status                 실행 중인 Wine 프로세스와 사용 코어
+  dpi     <96-288>       Wine 글꼴/UI 배율
+  cfg                    winecfg 실행
+  wine    <인자...>       환경이 적용된 wine 직접 실행 (예: s26dex wine taskmgr)
+  shortcut <이름> [run옵션] <exe>   Termux:Widget 바로가기 생성
+  kill                   Wine 프로세스 전부 종료
+  stop                   Wine + X 서버 + 오디오 종료
+EOF
+}
+
+# ------------------------------------------------------------------ helpers
+x11_pref() {
+  have termux-x11-preference || { warn "termux-x11-preference 없음 (termux-x11-nightly 패키지 확인)"; return 0; }
+  timeout 10 termux-x11-preference "$@" >/dev/null 2>&1 ||
+    warn "Termux:X11 설정 적용 실패 (앱이 열려 있어야 함): $*"
+}
+
+start_audio() {
+  have pulseaudio || return 0
+  pulseaudio --check >/dev/null 2>&1 && return 0
+  pulseaudio --start --exit-idle-time=-1 >/dev/null 2>&1 || warn "PulseAudio 시작 실패 (소리 없음)"
+}
+
+wine_reg() { "$(wine_bin)" reg add "$@" /f >/dev/null 2>&1; }
+
+dxvk_dir()  { echo "$S26_CACHE_DIR/dl/dxvk-$DXVK_VERSION"; }
+vkd3d_dir() { echo "$S26_CACHE_DIR/dl/vkd3d-proton-$VKD3D_VERSION"; }
+sys32()     { echo "$S26_WINEPREFIX/drive_c/windows/system32"; }
+syswow()    { echo "$S26_WINEPREFIX/drive_c/windows/syswow64"; }
+dxvk_deployed()  { grep -qa 'dxvk' "$(sys32)/d3d11.dll" 2>/dev/null; }
+vkd3d_deployed() { grep -qai 'vkd3d' "$(sys32)/d3d12core.dll" 2>/dev/null; }
+
+fetch() { # url dest
+  [ -s "$2" ] && return 0
+  info "다운로드: $1"
+  if have curl; then curl -fL --retry 3 -o "$2.part" "$1"
+  else wget -O "$2.part" "$1"; fi && mv "$2.part" "$2"
+}
+
+dxvk_download() {
+  local dl="$S26_CACHE_DIR/dl"; mkdir -p "$dl"
+  local dz="$dl/dxvk-$DXVK_VERSION.tar.gz" vz="$dl/vkd3d-proton-$VKD3D_VERSION.tar.zst"
+  fetch "https://github.com/doitsujin/dxvk/releases/download/v$DXVK_VERSION/dxvk-$DXVK_VERSION.tar.gz" "$dz" ||
+    die "DXVK 다운로드 실패"
+  [ -d "$(dxvk_dir)" ] || tar -xzf "$dz" -C "$dl" || die "DXVK 압축 해제 실패"
+  ok "DXVK $DXVK_VERSION 준비됨"
+  if fetch "https://github.com/HansKristian-Work/vkd3d-proton/releases/download/v$VKD3D_VERSION/vkd3d-proton-$VKD3D_VERSION.tar.zst" "$vz"; then
+    if [ ! -d "$(vkd3d_dir)" ] && ! { zstd -dc "$vz" | tar -x -C "$dl"; }; then
+      rm -rf "$(vkd3d_dir)"
+      warn "VKD3D-Proton 압축 해제 실패 (pkg install zstd) — D3D12 는 Wine 내장 vkd3d 사용"
+      return 0
+    fi
+    ok "VKD3D-Proton $VKD3D_VERSION 준비됨"
+  else
+    warn "VKD3D-Proton 다운로드 실패 — D3D12 는 Wine 내장 vkd3d 사용"
+  fi
+}
+
+dxvk_deploy() {
+  [ -d "$S26_WINEPREFIX/drive_c/windows" ] || { warn "Wine 프리픽스가 아직 없음 — s26dex start 시 자동 적용"; return 0; }
+  [ -d "$(dxvk_dir)" ] || dxvk_download
+  local d v
+  d="$(dxvk_dir)"; v="$(vkd3d_dir)"
+  cp -f "$d"/x64/*.dll "$(sys32)/" && cp -f "$d"/x32/*.dll "$(syswow)/" || die "DXVK 복사 실패"
+  if [ -d "$v" ]; then
+    local x86="$v/x86"; [ -d "$x86" ] || x86="$v/x32"
+    cp -f "$v"/x64/d3d12*.dll "$(sys32)/" 2>/dev/null
+    cp -f "$x86"/d3d12*.dll "$(syswow)/" 2>/dev/null
+  fi
+  ok "DXVK 적용: system32(x64) / syswow64(x86)  — 오버라이드는 run 시 x86/x64 앱에만 적용"
+}
+
+ensure_prefix() {
+  if [ ! -f "$S26_WINEPREFIX/system.reg" ]; then
+    info "Wine 프리픽스 생성: $S26_WINEPREFIX (최초 1회, 1~3분)"
+    ( wine_base_env; WINEDLLOVERRIDES="mscoree=;mshtml=" "$(wine_bin)" wineboot -i ) \
+      >"$S26_LOG_DIR/wineboot.log" 2>&1 || warn "wineboot 경고 — $S26_LOG_DIR/wineboot.log 확인"
+    ( wine_base_env; "$(wineserver_bin)" -w )
+    ( wine_base_env
+      # 게임 전체화면 시 마우스가 창 밖으로 나가지 않게
+      wine_reg 'HKCU\Software\Wine\X11 Driver' /v GrabFullscreen /t REG_SZ /d Y )
+    ok "프리픽스 생성 완료"
+  fi
+  if ! dxvk_deployed && [ -d "$(dxvk_dir)" ]; then dxvk_deploy; fi
+}
+
+wait_x11() {
+  local _
+  for _ in $(seq 1 40); do x11_running && return 0; sleep 0.5; done
+  return 1
+}
+
+# ------------------------------------------------------------------ commands
+cmd_detect() { require_termux; detect_device; }
+
+cmd_start() {
+  local game=0 render="" res="" native=0 fs="" shell="${S26_SHELL:-desktop}"
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --game) game=1 ;;
+      --render) render="$2"; shift ;;
+      --res) res="$2"; shift ;;
+      --native) native=1 ;;
+      --fullscreen) fs=true ;;
+      --shell) shell="$2"; shift ;;
+      *) die "start: 알 수 없는 옵션 $1" ;;
+    esac; shift
+  done
+  require_termux; mkdirs; load_device
+
+  have termux-wake-lock && termux-wake-lock >/dev/null 2>&1 &
+  /system/bin/pm path com.termux.x11 >/dev/null 2>&1 ||
+    warn "Termux:X11 앱이 설치되지 않은 것 같습니다 (docs/ANDROID-SETUP.md)."
+  start_audio
+
+  if ! x11_running; then
+    info "Termux:X11 서버 시작 ($S26_DISPLAY)"
+    # shellcheck disable=SC2086
+    nohup termux-x11 "$S26_DISPLAY" $S26_X11_ARGS >"$S26_LOG_DIR/x11.log" 2>&1 &
+  fi
+  am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity >/dev/null 2>&1
+  wait_x11 || die "X 서버 응답 없음 — $S26_LOG_DIR/x11.log 확인 (검은 화면이면 S26_X11_ARGS=-legacy-drawing)"
+
+  # Termux:X11 설정 (DeX 에는 물리 키보드/마우스가 있으므로 보조 키바·IME 숨김)
+  local p=(showAdditionalKbd:false showIMEWhileExternalConnected:false)
+  if [ "$game" = 1 ]; then
+    p+=(pointerCapture:true preferScancodes:true dexMetaKeyCapture:true screenIdleTimeout:never)
+    fs="${fs:-true}"
+  else
+    p+=(pointerCapture:false dexMetaKeyCapture:false)
+  fi
+  [ -n "$fs" ] && p+=("fullscreen:$fs")
+  if [ -n "$render" ]; then
+    [[ "$render" =~ ^[0-9]+$ ]] && [ "$render" -ge 34 ] && [ "$render" -le 300 ] || die "--render 는 34~300(%)"
+    p+=(displayResolutionMode:scaled "displayScale:$((10000 / render))" displayFilteringMode:bilinear)
+  elif [ -n "$res" ]; then
+    [[ "$res" =~ ^[0-9]+x[0-9]+$ ]] || die "--res 형식: 1920x1080"
+    p+=(displayResolutionMode:custom "displayResolutionCustom:$res")
+  elif [ "$native" = 1 ]; then
+    p+=(displayResolutionMode:native)
+  fi
+  x11_pref "${p[@]}"
+  sleep 1
+
+  ensure_prefix
+  local size; size="$(x11_size)"; size="${size:-1920x1080}"
+  ok "X 화면: $size  |  GPU: ${S26_VK_DEVICE:-?}"
+
+  case "$shell" in
+    desktop)
+      ( wine_base_env
+        if [ -n "${S26_CPUS_ALL:-}" ] && have taskset; then
+          nohup taskset -c "$S26_CPUS_ALL" "$(wine_bin)" explorer "/desktop=$S26_DESKTOP_NAME,$size" >"$S26_LOG_DIR/desktop.log" 2>&1 &
+        else
+          nohup "$(wine_bin)" explorer "/desktop=$S26_DESKTOP_NAME,$size" >"$S26_LOG_DIR/desktop.log" 2>&1 &
+        fi )
+      ok "Wine 데스크톱 실행 (작업표시줄/시작메뉴). 앱 실행: s26dex run <exe>" ;;
+    openbox)
+      have openbox || die "openbox 미설치: pkg install openbox"
+      DISPLAY="$S26_DISPLAY" nohup openbox-session >"$S26_LOG_DIR/openbox.log" 2>&1 &
+      ok "openbox 실행. 앱 실행: s26dex run --no-desktop <exe>" ;;
+    none) ok "X 서버만 실행" ;;
+    *) die "--shell 은 desktop|openbox|none" ;;
+  esac
+}
+
+resolve_profile() { # 이름 또는 파일 경로 -> 파일
+  local name="$1"
+  if [ -f "$name" ]; then echo "$name"
+  elif [ -f "$S26_CONF_DIR/profiles/$name.env" ]; then echo "$S26_CONF_DIR/profiles/$name.env"
+  elif [ -f "$S26_ROOT/profiles/$name.env" ]; then echo "$S26_ROOT/profiles/$name.env"
+  else die "프로필 없음: $name (compat|balanced|performance|extreme)"; fi
+}
+
+cmd_run() {
+  local profile="$S26_DEFAULT_PROFILE" emu32="" cores="" fps="" d3d="" gl="" hud=0 mango=0
+  local desktop="${S26_RUN_DESKTOP:-1}" log=0 dry=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -p|--profile) profile="$2"; shift ;;
+      --emu32) emu32="$2"; shift ;;
+      --cores) cores="$2"; shift ;;
+      --fps) fps="$2"; shift ;;
+      --d3d) d3d="$2"; shift ;;
+      --gl) gl="$2"; shift ;;
+      --hud) hud=1 ;;
+      --mangohud) mango=1 ;;
+      --no-desktop) desktop=0 ;;
+      --log) log=1 ;;
+      --dry-run) dry=1 ;;
+      --) shift; break ;;
+      -*) die "run: 알 수 없는 옵션 $1" ;;
+      *) break ;;
+    esac; shift
+  done
+  [ $# -ge 1 ] || die "실행할 파일을 지정하세요: s26dex run game.exe"
+  local target="$1"; shift
+  if [ -e "$target" ]; then
+    target="$(readlink -f "$target")"
+  elif [[ ! "$target" =~ ^[A-Za-z]:[\\/] ]]; then
+    die "파일 없음: $target"
+  fi
+  local arch; arch="$(pe_arch "$target")"
+  local base="${target##*/}"
+
+  [ "$dry" = 1 ] || require_termux
+  mkdirs; load_device; wine_base_env
+
+  # 프로필 -> 앱별 설정(~/.config/sma26dex/apps/<exe>.env) -> 명령행 옵션 순으로 적용
+  local pf; pf="$(resolve_profile "$profile")" || exit 1
+  set -a
+  # shellcheck disable=SC1090
+  . "$pf"
+  # shellcheck disable=SC1090
+  [ -f "$S26_CONF_DIR/apps/$base.env" ] && . "$S26_CONF_DIR/apps/$base.env"
+  set +a
+
+  export HODLL64="${HODLL64:-libarm64ecfex.dll}"
+  case "${emu32:-${S26_EMU32:-box64}}" in
+    box64) export HODLL=wowbox64.dll ;;
+    fex)   export HODLL=libwow64fex.dll ;;
+    *) die "--emu32 는 box64|fex" ;;
+  esac
+
+  # Direct3D: x86/x64 앱에만 DXVK(x64/x32 DLL) 적용. ARM64 네이티브 앱은 Wine 내장 사용.
+  local d="${d3d:-${S26_D3D:-dxvk}}"
+  local ov="${WINEDLLOVERRIDES:-}"
+  if [ "$d" = dxvk ]; then
+    case "$arch" in
+      x86|x86_64|arm64ec)
+        if [ "$dry" = 1 ] || dxvk_deployed; then
+          ov="${ov:+$ov;}d3d8,d3d9,d3d10core,d3d11,dxgi=n,b"
+          { [ "$dry" = 1 ] || vkd3d_deployed; } && ov="$ov;d3d12,d3d12core=n,b"
+        else
+          warn "DXVK 미적용 상태 — 's26dex dxvk install' 실행 권장 (지금은 wined3d 사용)"
+        fi ;;
+    esac
+  fi
+  [ -n "$ov" ] && export WINEDLLOVERRIDES="$ov"
+
+  case "${gl:-${S26_GL:-zink}}" in
+    zink) export MESA_LOADER_DRIVER_OVERRIDE=zink GALLIUM_DRIVER=zink ;;
+    llvmpipe) export GALLIUM_DRIVER=llvmpipe LIBGL_ALWAYS_SOFTWARE=1 ;;
+    *) die "--gl 은 zink|llvmpipe" ;;
+  esac
+  [ -n "$fps" ] && export DXVK_FRAME_RATE="$fps"
+  [ "$hud" = 1 ] && export DXVK_HUD="devinfo,fps,frametimes,gpuload,compiler"
+  [ "$mango" = 1 ] && export MANGOHUD=1
+
+  local cpus; case "${cores:-${S26_CPUS:-all}}" in
+    all) cpus="${S26_CPUS_ALL:-}" ;;
+    big) cpus="${S26_CPUS_BIG:-}" ;;
+    prime) cpus="${S26_CPUS_PRIME:-}" ;;
+    *) cpus="${cores:-$S26_CPUS}" ;;
+  esac
+
+  local cmd=()
+  [ -n "$cpus" ] && have taskset && cmd+=(taskset -c "$cpus")
+  cmd+=("$(wine_bin)")
+  [ "$desktop" = 1 ] && cmd+=(explorer "/desktop=$S26_DESKTOP_NAME,$( [ "$dry" = 1 ] && echo 1920x1080 || x11_size)")
+  case "${target,,}" in
+    *.msi) cmd+=(msiexec /i "$target") ;;
+    *.bat|*.cmd) cmd+=(cmd /c "$target") ;;
+    *.lnk) cmd+=(start /unix "$target") ;;
+    *) cmd+=("$target") ;;
+  esac
+  cmd+=("$@")
+
+  local note=""
+  case "$arch" in
+    arm64) note="ARM64 네이티브 — 에뮬레이션 없음" ;;
+    x86_64) note="x64 → FEX(ARM64EC)" ;;
+    x86) note="x86 → ${HODLL%.dll}" ;;
+  esac
+  info "앱: $base [$arch${note:+, $note}]"
+  info "프로필: ${pf##*/}  코어: ${cpus:-제한없음}  D3D: $d  GL: ${GALLIUM_DRIVER:-기본}  GPU: ${S26_VK_DEVICE:-?}"
+
+  if [ "$dry" = 1 ]; then
+    env | grep -E '^(FEX_|BOX64_|HODLL|WINE|DXVK_|VKD3D|MESA_|GALLIUM|VK_|TU_|vblank|MANGOHUD|LIBGL)' | sort
+    printf '명령:'; printf ' %q' "${cmd[@]}"; echo
+    return 0
+  fi
+
+  # 백그라운드 cpuset 경고 (Termux 가 화면 밖으로 취급되면 저전력 코어로 묶임)
+  local allowed; allowed="$(proc_allowed)"
+  if [ -n "$allowed" ] && [ -n "${S26_CPUS_ALL:-}" ] && [ "$allowed" != "$S26_CPUS_ALL" ]; then
+    warn "현재 Termux 프로세스 허용 코어: $allowed (전체: $S26_CPUS_ALL, cpuset: $(proc_cpuset))"
+    warn "→ Termux:X11 sharedUid APK 설치 필요 (docs/ANDROID-SETUP.md §2). 지금은 일부 코어만 사용됩니다."
+  fi
+
+  x11_running || cmd_start
+  ensure_prefix
+  if [ -d "$(dirname "$target")" ]; then cd "$(dirname "$target")" || true; fi
+
+  if [ "$log" = 1 ]; then
+    local lf; lf="$S26_LOG_DIR/${base%.*}-$(date +%Y%m%d-%H%M%S).log"
+    export WINEDEBUG="err+all,fixme-all"
+    info "로그: $lf"
+    "${cmd[@]}" 2>&1 | tee "$lf"
+  else
+    "${cmd[@]}"
+  fi
+}
+
+cmd_info() {
+  [ $# -ge 1 ] || die "사용법: s26dex info <exe>"
+  local a; a="$(pe_arch "$1")"
+  echo "$1: $a"
+  case "$a" in
+    arm64) echo "  → 네이티브 실행. 가장 빠름." ;;
+    x86_64) echo "  → FEX ARM64EC 에뮬레이션. Wine/시스템 호출과 그래픽 드라이버는 네이티브." ;;
+    x86) echo "  → 32비트: wowbox64(기본) 또는 --emu32 fex." ;;
+    arm64ec) echo "  → ARM64EC: 네이티브 + x64 플러그인 혼용 가능." ;;
+  esac
+}
+
+cmd_dxvk() {
+  case "${1:-install}" in
+    install) require_termux; mkdirs; dxvk_download; dxvk_deploy ;;
+    deploy)  require_termux; dxvk_deploy ;;
+    status)
+      dxvk_deployed && ok "DXVK 적용됨 ($(sys32))" || warn "DXVK 미적용"
+      vkd3d_deployed && ok "VKD3D-Proton 적용됨" || warn "VKD3D-Proton 미적용" ;;
+    *) die "s26dex dxvk install|deploy|status" ;;
+  esac
+}
+
+cmd_doctor() {
+  require_termux; mkdirs
+  local all bad=0
+  echo "== 기기"
+  echo "  모델: $(getprop ro.product.model)  Android $(getprop ro.build.version.release) (SDK $(getprop ro.build.version.sdk))"
+  echo "  SoC : $(getprop ro.soc.manufacturer) $(getprop ro.soc.model)  /  GPU 계열: $(gpu_family)"
+  echo "  코어: $(cpu_freq_table | awk '{printf "%s:%dMHz ", $1, $2/1000}')"
+
+  echo "== 패키지"
+  local c
+  for c in termux-x11 termux-x11-preference hangover-wine vulkaninfo pulseaudio taskset zstd xrandr; do
+    if have "$c"; then ok "$c"; else warn "$c 없음 — ./install.sh 재실행"; bad=1; fi
+  done
+  [ -x "$(wine_bin)" ] && ok "Hangover: $("$(wine_bin)" --version 2>/dev/null)" || { warn "Hangover Wine 없음"; bad=1; }
+  /system/bin/pm path com.termux.x11 >/dev/null 2>&1 && ok "Termux:X11 앱 설치됨" || { warn "Termux:X11 앱 미설치"; bad=1; }
+
+  echo "== Vulkan (DXVK/zink 의 전제)"
+  detect_device | sed 's/^/  /'
+  load_device
+  case "${S26_VK_API:-}" in
+    1.[3-9]*|[2-9]*) ok "Vulkan $S26_VK_API — DXVK 2.x/3.x 사용 가능" ;;
+    "") warn "Vulkan API 버전 확인 불가"; bad=1 ;;
+    *) warn "Vulkan $S26_VK_API (<1.3) — DXVK_VERSION=1.10.3 으로 낮춰 설치 권장"; bad=1 ;;
+  esac
+
+  echo "== CPU 스케줄링 (가장 흔한 성능 저하 원인)"
+  all="${S26_CPUS_ALL:-}"
+  echo "  이 셸의 cpuset: $(proc_cpuset)   허용 코어: $(proc_allowed)   (전체 $all)"
+  if [ "$(proc_allowed)" != "$all" ]; then
+    warn "Termux 가 일부 코어로 제한됨 → Termux:X11 sharedUid APK + GitHub판 Termux 사용 (docs/ANDROID-SETUP.md)"
+    bad=1
+  else
+    ok "모든 코어 사용 가능"
+  fi
+
+  echo "== Android 설정"
+  local ph; ph="$(/system/bin/settings get global settings_enable_monitor_phantom_procs 2>/dev/null)"
+  case "$ph" in
+    false) ok "팬텀 프로세스 킬러 꺼짐" ;;
+    true|null|"") warn "팬텀 프로세스 킬러 상태: ${ph:-확인불가} → 개발자 옵션 '하위 프로세스 제한 사용 중지' 켜기" ;;
+  esac
+  [ -r /dev/kvm ] && echo "  /dev/kvm 접근 가능 (VM 가속 가능)" || echo "  /dev/kvm 접근 불가 → Windows VM(QEMU)은 순수 에뮬레이션이라 비추천"
+
+  echo "== 저장공간"
+  df -h "$HOME" 2>/dev/null | tail -1 | awk '{print "  남은 공간: "$4}'
+
+  echo "== Wine"
+  [ -f "$S26_WINEPREFIX/system.reg" ] && ok "프리픽스: $S26_WINEPREFIX" || warn "프리픽스 없음 (s26dex start 시 생성)"
+  dxvk_deployed && ok "DXVK 적용됨" || warn "DXVK 미적용 → s26dex dxvk install"
+  [ "$bad" = 0 ] && ok "점검 완료: 문제 없음" || warn "위 경고 항목을 먼저 해결하세요."
+}
+
+cmd_status() {
+  local pid
+  printf '%-7s %-6s %-8s %-14s %-12s %s\n' PID CPU% RSS_MB CPUSET 허용코어 명령
+  for pid in $(pgrep -f 'wine|\.exe|termux-x11' 2>/dev/null); do
+    [ -r "/proc/$pid/status" ] || continue
+    printf '%-7s %-6s %-8s %-14s %-12s %s\n' "$pid" \
+      "$(ps -o pcpu= -p "$pid" 2>/dev/null | tr -d ' ')" \
+      "$(( $(awk '/VmRSS/{print $2}' "/proc/$pid/status" 2>/dev/null || echo 0) / 1024 ))" \
+      "$(proc_cpuset "$pid")" "$(proc_allowed "$pid")" \
+      "$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | cut -c1-70)"
+  done
+}
+
+cmd_dpi() {
+  [[ "${1:-}" =~ ^[0-9]+$ ]] || die "사용법: s26dex dpi 120   (96=100%, 120=125%, 144=150%, 192=200%)"
+  load_device; wine_base_env
+  wine_reg 'HKCU\Control Panel\Desktop' /v LogPixels /t REG_DWORD /d "$1" && ok "DPI=$1 (Wine 재시작 후 적용: s26dex kill)"
+}
+
+cmd_wine() { load_device; wine_base_env; ensure_prefix; exec "$(wine_bin)" "$@"; }
+
+cmd_shortcut() {
+  [ $# -ge 2 ] || die "사용법: s26dex shortcut <이름> [run옵션] <exe>"
+  local name="$1"; shift
+  local dir="$HOME/.shortcuts/tasks"; mkdir -p "$dir"
+  local f="$dir/$name.sh" a args=()
+  for a in "$@"; do [ -e "$a" ] && a="$(readlink -f "$a")"; args+=("$a"); done
+  { echo "#!$PREFIX/bin/bash"; printf 'exec %q run' "$PREFIX/bin/s26dex"; printf ' %q' "${args[@]}"; echo; } > "$f"
+  chmod 700 "$f"
+  ok "바로가기 생성: $f (Termux:Widget 위젯에서 '$name' 선택)"
+}
+
+cmd_kill() { load_device; wine_base_env; "$(wineserver_bin)" -k 2>/dev/null; ok "Wine 종료"; }
+
+cmd_stop() {
+  cmd_kill
+  am broadcast -a com.termux.x11.ACTION_STOP -p com.termux.x11 >/dev/null 2>&1
+  pkill -f 'termux-x11' 2>/dev/null
+  pulseaudio --kill >/dev/null 2>&1
+  have termux-wake-unlock && termux-wake-unlock >/dev/null 2>&1
+  ok "모두 종료"
+}
+
+main() {
+  local c="${1:-help}"; shift 2>/dev/null || true
+  case "$c" in
+    start) cmd_start "$@" ;;
+    run) cmd_run "$@" ;;
+    info) cmd_info "$@" ;;
+    dxvk) cmd_dxvk "$@" ;;
+    detect) cmd_detect ;;
+    doctor) cmd_doctor ;;
+    status) cmd_status ;;
+    dpi) cmd_dpi "$@" ;;
+    cfg) cmd_wine winecfg ;;
+    wine) cmd_wine "$@" ;;
+    shortcut) cmd_shortcut "$@" ;;
+    kill) cmd_kill ;;
+    stop) cmd_stop ;;
+    help|-h|--help) usage ;;
+    *) usage; exit 1 ;;
+  esac
+}
+main "$@"
