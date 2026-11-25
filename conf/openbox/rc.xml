@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sma26dex DeX 창 모드 전용 openbox 설정.  DeX 창 하나 = X 디스플레이 하나 = Windows 앱 하나.
+  · 앱 본창: s26dex 의 맞춤 루프가 클라이언트 영역을 DeX 창에 꽉 맞추고 이 제목표시줄은 화면 밖으로 보냄
+    (Wine 11 은 WM 이 장식을 강제로 없애거나 최대화하면 좌표가 어긋나므로, 장식은 정상으로 두고 위치로 숨김)
+  · 대화상자·보조 창: Windows 11 스타일 제목표시줄(S26Win 테마)로 가운데 표시
+  · 키 바인딩 없음 → Alt+F4 등은 Windows 앱이, Alt+Tab 은 DeX 가 처리
+-->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <resistance><strength>0</strength><screen_edge_strength>0</screen_edge_strength></resistance>
+  <focus><focusNew>yes</focusNew><followMouse>no</followMouse><focusLast>yes</focusLast></focus>
+  <placement><policy>Smart</policy><center>yes</center></placement>
+  <theme>
+    <name>S26Win</name>
+    <titleLayout>LMC</titleLayout>
+    <keepBorder>no</keepBorder>
+    <animateIconify>no</animateIconify>
+    <font place="ActiveWindow"><name>Noto Sans CJK KR</name><size>9</size><weight>Normal</weight></font>
+    <font place="InactiveWindow"><name>Noto Sans CJK KR</name><size>9</size><weight>Normal</weight></font>
+  </theme>
+  <desktops><number>1</number><popupTime>0</popupTime></desktops>
+  <margins><top>0</top><bottom>0</bottom><left>0</left><right>0</right></margins>
+  <keyboard></keyboard>
+  <mouse>
+    <dragThreshold>3</dragThreshold>
+    <doubleClickTime>300</doubleClickTime>
+    <context name="Client">
+      <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="Middle" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="Right" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+    </context>
+    <context name="Titlebar">
+      <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="Left" action="Drag"><action name="Move"/></mousebind>
+    </context>
+    <context name="Close">
+      <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+      <mousebind button="Left" action="Click"><action name="Close"/></mousebind>
+    </context>
+    <context name="Frame">
+      <mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind>
+    </context>
+  </mouse>
+  <applications>
+    <application type="dialog">
+      <decor>yes</decor>
+      <position force="yes"><x>center</x><y>center</y></position>
+      <focus>yes</focus>
+    </application>
+  </applications>
+</openbox_config>

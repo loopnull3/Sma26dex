@@ -23,6 +23,15 @@
 | .NET 앱 | 처음 실행할 때 Wine Mono 설치 창이 뜨면 설치를 진행합니다 |
 | Wine 업데이트 후 DXVK가 풀림 | `s26dex dxvk deploy` (Wine 이 프리픽스를 갱신하면서 DLL 을 덮어씀) |
 | 프리픽스를 완전히 초기화 | `s26dex kill && rm -rf ~/.wine-s26 && s26dex start` |
+| **DeX 창 모드** | |
+| DeX 창을 닫았는데 다시 실행하면 "이미 실행 중" | DeX ✕는 창만 닫습니다. 그 메시지와 함께 창이 다시 열립니다. 종료는 앱 안에서 하거나 `s26dex close <앱>` |
+| 앱 화면이 DeX 창보다 작고 가운데에 있음 | 크기가 고정된 창입니다(앱이 크기 조절을 막음). 정상 동작입니다 |
+| 앱 화면 아래에 15~22px 빈 줄 | 앱 컨테이너의 Win32 제목 지표가 적용되지 않은 상태 → `s26dex close <앱>` 후 `s26dex app reset <앱>` |
+| 설치한 프로그램이 DeX 창에서 "설정이 없다"며 실행 안 됨 | 컨테이너를 설치 전에 만든 경우 → `s26dex app reset <앱>` |
+| MDI 앱(창 안의 창)의 내부 제목표시줄이 너무 얇음 | `config.env` 에 `S26_DEX_THIN_CAPTION=0` → `s26dex app reset <앱>` |
+| 창이 안 뜨고 `s26dex ps` 에 남아 있음 | `s26dex close --force <앱>`. 로그: `~/.cache/sma26dex/logs/x11-<앱>.log`, `openbox-<앱>.log` |
+| 아이콘이 안 붙음 | `pkg install icoutils` 후 `s26dex app add` 다시 실행. 아이콘 리소스가 없는 exe도 있습니다 |
+| 한글 메뉴/코드페이지 | `s26dex locale ko` (clang 으로 심 빌드, 1회). 끄기: `s26dex locale off` |
 
 ## 동작 확인용 명령
 

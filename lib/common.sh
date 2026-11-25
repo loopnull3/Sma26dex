@@ -7,6 +7,8 @@ S26_CACHE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/sma26dex"
 S26_LOG_DIR="$S26_CACHE_DIR/logs"
 S26_DEVICE_ENV="$S26_CONF_DIR/device.env"
 S26_USER_ENV="$S26_CONF_DIR/config.env"
+S26_DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/sma26dex"
+S26_LOCALE_LIB="$S26_DATA_DIR/lib/libs26locale.so"
 
 # 사용자 설정 기본값 (config.env 에서 덮어쓰기 가능)
 S26_WINEPREFIX="${S26_WINEPREFIX:-$HOME/.wine-s26}"
@@ -199,7 +201,48 @@ wine_base_env() {
     export VK_ICD_FILENAMES="$S26_VK_ICD" VK_DRIVER_FILES="$S26_VK_ICD"
   fi
   [ -n "${S26_TU_DEBUG:-}" ] && export TU_DEBUG="${TU_DEBUG:+$TU_DEBUG,}$S26_TU_DEBUG"
+  # 한국어 로캘 심 (s26dex locale ko): bionic 대신 S26_LOCALE 을 Wine 에 알려줌
+  if [ -n "${S26_LOCALE:-}" ] && [ -f "$S26_LOCALE_LIB" ]; then
+    export S26_LOCALE
+    case ":${LD_PRELOAD:-}:" in
+      *":$S26_LOCALE_LIB:"*) ;;
+      *) export LD_PRELOAD="${LD_PRELOAD:+$LD_PRELOAD:}$S26_LOCALE_LIB" ;;
+    esac
+  fi
   return 0
+}
+
+# config.env 의 KEY 를 VALUE 로 (빈 값이면 줄 삭제)
+config_set() {
+  mkdir -p "$S26_CONF_DIR"
+  touch "$S26_USER_ENV"
+  sed -i "/^$1=/d" "$S26_USER_ENV"
+  [ -n "$2" ] && printf '%s=%q\n' "$1" "$2" >> "$S26_USER_ENV"
+  return 0
+}
+
+korean_font_family() {
+  have fc-list || return 1
+  local all f
+  # fc-list 는 이름 속 '-' 를 '\-' 로 출력함
+  all="$(fc-list :lang=ko family 2>/dev/null | sed 's/\\-/-/g' | tr ',' '\n' | sort -u)"
+  f="$(printf '%s\n' "$all" | grep -m1 -x 'Noto Sans CJK KR')"
+  [ -n "$f" ] || f="$(printf '%s\n' "$all" | grep -m1 -E ' KR$|Korean|Nanum|Noto Sans CJK|Malgun')"
+  [ -n "$f" ] || f="$(printf '%s\n' "$all" | head -1)"
+  [ -n "$f" ] && echo "$f"
+}
+
+# 현재 WINEPREFIX 에 Windows 한글 글꼴 이름 → 설치된 한글 글꼴로 대체 등록
+# (winetricks fakekorean 과 같은 방식. Windows 앱이 맑은 고딕/굴림을 찾으면 Noto Sans CJK KR 사용)
+apply_korean_fonts() {
+  local fam n
+  fam="$(korean_font_family)" || { warn "한글 글꼴 없음 → pkg install otf-noto-sans-cjk fontconfig-utils"; return 0; }
+  "$(wineserver_bin)" -p 30 2>/dev/null
+  for n in Batang BatangChe Dotum DotumChe Gulim GulimChe Gungsuh GungsuhChe "Malgun Gothic" \
+           바탕 바탕체 돋움 돋움체 굴림 굴림체 궁서 궁서체 "맑은 고딕"; do
+    "$(wine_bin)" reg add 'HKCU\Software\Wine\Fonts\Replacements' /v "$n" /t REG_SZ /d "$fam" /f >/dev/null 2>&1
+  done
+  ok "한글 글꼴 대체: 맑은 고딕·굴림·돋움·바탕 → $fam"
 }
 
 # PE 헤더에서 실행 파일 아키텍처 판별

@@ -1,0 +1,62 @@
+# S26Win — Windows 11 라이트 느낌의 openbox 테마 (대화상자 제목표시줄용)
+border.width: 1
+padding.width: 10
+padding.height: 7
+window.handle.width: 0
+window.client.padding.width: 0
+window.client.padding.height: 0
+
+window.active.border.color: #8a8a8a
+window.inactive.border.color: #c4c4c4
+window.active.client.color: #f3f3f3
+window.inactive.client.color: #f3f3f3
+
+window.active.title.bg: flat solid
+window.active.title.bg.color: #ffffff
+window.inactive.title.bg: flat solid
+window.inactive.title.bg.color: #f3f3f3
+window.active.label.bg: parentrelative
+window.inactive.label.bg: parentrelative
+window.active.label.text.color: #1b1b1b
+window.inactive.label.text.color: #8f8f8f
+window.label.text.justify: left
+
+window.active.button.unpressed.bg: flat solid
+window.active.button.unpressed.bg.color: #ffffff
+window.active.button.unpressed.image.color: #1b1b1b
+window.active.button.hover.bg: flat solid
+window.active.button.hover.bg.color: #c42b1c
+window.active.button.hover.image.color: #ffffff
+window.active.button.pressed.bg: flat solid
+window.active.button.pressed.bg.color: #a52517
+window.active.button.pressed.image.color: #ffffff
+window.inactive.button.unpressed.bg: flat solid
+window.inactive.button.unpressed.bg.color: #f3f3f3
+window.inactive.button.unpressed.image.color: #8f8f8f
+window.inactive.button.hover.bg: flat solid
+window.inactive.button.hover.bg.color: #c42b1c
+window.inactive.button.hover.image.color: #ffffff
+
+menu.border.width: 1
+menu.border.color: #c4c4c4
+menu.title.bg: flat solid
+menu.title.bg.color: #f3f3f3
+menu.title.text.color: #1b1b1b
+menu.items.bg: flat solid
+menu.items.bg.color: #ffffff
+menu.items.text.color: #1b1b1b
+menu.items.disabled.text.color: #8f8f8f
+menu.items.active.bg: flat solid
+menu.items.active.bg.color: #e5f1fb
+menu.items.active.text.color: #1b1b1b
+menu.separator.color: #d6d6d6
+
+osd.border.width: 1
+osd.border.color: #c4c4c4
+osd.bg: flat solid
+osd.bg.color: #ffffff
+osd.label.text.color: #1b1b1b
+osd.hilight.bg: flat solid
+osd.hilight.bg.color: #0067c0
+osd.unhilight.bg: flat solid
+osd.unhilight.bg.color: #d6d6d6

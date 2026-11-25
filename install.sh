@@ -24,7 +24,12 @@ pkg install -y \
   vulkan-tools \
   pulseaudio \
   openbox \
+  wmctrl \
+  xorg-xprop \
+  xorg-xwininfo \
   xorg-xrandr \
+  icoutils \
+  fontconfig-utils \
   otf-noto-sans-cjk \
   mangohud \
   util-linux \
@@ -55,6 +60,7 @@ ${_c_g}설치 완료.${_c_0}
   2) 개발자 옵션 > '하위 프로세스 제한 사용 중지' 켜기
   3) Termux / Termux:X11 배터리 사용량 '제한 없음'
   4) 점검:   s26dex doctor
-  5) 실행:   s26dex start            (DeX 창에 Wine 데스크톱)
-             s26dex run ~/Games/app.exe
+  5) 실행:   s26dex run ~/Apps/app.exe       (앱 하나 = DeX 창 하나)
+             s26dex app add 메모 ~/Apps/app.exe   (DeX 화면에 아이콘 바로가기)
+             s26dex start                    (시작 메뉴가 있는 Windows 데스크톱 모드)
 EOF

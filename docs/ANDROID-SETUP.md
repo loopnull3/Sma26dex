@@ -53,12 +53,24 @@ Termux만으로 하려면 `pkg install android-tools`를 설치하고 개발자 
 
 ## 5. DeX
 
-- 모니터를 연결하고 DeX를 실행한 뒤 Termux에서 `s26dex start`를 실행하면 Termux:X11이 DeX 창으로 열립니다.
-- 창 크기를 바꾸면 X 화면 크기도 바뀝니다 (`native` 모드). 이미 떠 있는 Wine 가상 데스크톱 크기는 그대로이므로
+### DeX 창 모드 (기본: `s26dex run`, 앱 아이콘)
+- Windows 앱마다 **별도 DeX 창**이 열립니다. DeX 작업표시줄에 따로 잡히고 Alt+Tab으로 전환됩니다.
+- 창 크기를 바꾸거나 최대화하면 1초 안에 앱 화면이 그 크기로 다시 맞춰집니다.
+- 이 모드에서는 Termux:X11 설정을 `native` 해상도, 마우스 캡처 끔, DeX 단축키 가로채기 끔으로 맞춥니다.
+  Alt+Tab, Meta 키 같은 DeX 단축키는 DeX가 처리하고, Alt+F4는 DeX 창을 닫습니다
+  (앱은 계속 실행되므로 아이콘이나 `s26dex show <앱>`으로 다시 엽니다).
+- DeX 제목표시줄에는 "Termux:X11"이 표시됩니다.
+
+### Windows 데스크톱 모드 (`s26dex start`, 설치 프로그램)
+- DeX 창 하나 안에 시작 메뉴와 작업표시줄이 있는 Wine 데스크톱을 띄웁니다.
+- 창 크기를 바꾸면 X 화면 크기도 바뀌지만, 이미 떠 있는 Wine 가상 데스크톱 크기는 그대로입니다.
   창을 원하는 크기로 맞춘 뒤 `s26dex kill && s26dex start`로 다시 띄웁니다.
 - 게임 모드(`--game`):
   - 마우스가 창 안에 잡힙니다. **Esc**를 누르면 해제됩니다.
   - *Intercept system shortcuts*가 켜져서 Alt+F4, Meta+D 같은 DeX 단축키가 Windows 앱으로 갑니다.
+- 두 모드는 Termux:X11 설정(해상도 모드 등)을 같이 씁니다. 동시에 쓸 때는 마지막에 실행한 모드의 설정이 적용됩니다.
+
+### 공통
 - 화면이 검게 나오면 `S26_X11_ARGS=-legacy-drawing`, 색이 뒤바뀌어 나오면 `-force-bgra`를
   `~/.config/sma26dex/config.env`에 넣습니다.
 
@@ -74,7 +86,10 @@ Termux만으로 하려면 `pkg install android-tools`를 설치하고 개발자 
 `~/.config/sma26dex/config.env` (없으면 기본값 사용):
 
 ```bash
-S26_WINEPREFIX=$HOME/.wine-s26     # Wine 프리픽스 위치
+S26_WINEPREFIX=$HOME/.wine-s26     # 메인 Wine 프리픽스 (앱 컨테이너는 ~/.local/share/sma26dex/containers)
+S26_MODE=dex                       # run 기본 모드: dex(앱마다 DeX 창) | desktop(Wine 데스크톱)
+S26_DEX_THIN_CAPTION=1             # DeX 창 꽉 채우기용 Win32 제목표시줄 축소 (MDI 앱이 이상하면 0)
+S26_LOCALE=ko_KR.UTF-8             # s26dex locale ko 가 설정 (한국어 Windows)
 S26_DEFAULT_PROFILE=performance
 S26_DESKTOP_NAME=shell             # 'shell' = 작업표시줄/시작메뉴 있는 데스크톱
 S26_RUN_DESKTOP=1                  # 0 이면 run 이 가상 데스크톱 밖에서 실행 (openbox 사용 시)

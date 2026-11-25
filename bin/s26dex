@@ -7,18 +7,17 @@ _self="$(readlink -f "${BASH_SOURCE[0]}")"
 S26_ROOT="$(cd "$(dirname "$_self")/.." && pwd)"
 # shellcheck source=../lib/common.sh
 . "$S26_ROOT/lib/common.sh"
+# shellcheck source=../lib/dexwin.sh
+. "$S26_ROOT/lib/dexwin.sh"
 
 usage() {
   cat <<'EOF'
 사용법: s26dex <명령> [옵션]
 
-  start   [--game] [--render PCT | --res WxH | --native] [--fullscreen]
-          [--shell desktop|openbox|none]
-          X 서버(Termux:X11) + 오디오 + Wine 데스크톱을 띄움 (DeX 창으로 열림)
-            --game        게임 모드: 전체화면, 마우스 캡처, 스캔코드, 메타키 캡처
-            --render 75   네이티브 해상도의 75%로 렌더 후 확대 (GPU 부하↓)
-            --res 1600x900  고정 해상도
   run     [옵션] <파일.exe|.msi|.bat|.lnk> [인자...]
+          기본: 앱마다 독립된 DeX 창으로 실행 (DeX 작업표시줄·Alt+Tab·창 크기 조절)
+            --dex                 DeX 창 모드 (기본)
+            --desktop             Wine 데스크톱(시작 메뉴/작업표시줄) 안에서 실행 — 설치 프로그램 기본값
             -p, --profile compat|balanced|performance|extreme  (기본: performance)
             --emu32 box64|fex     32비트 x86 에뮬레이터 (기본 box64)
             --cores all|big|prime|0-7   CPU 코어 고정 (기본: 프로필 값)
@@ -26,10 +25,23 @@ usage() {
             --d3d dxvk|wined3d    Direct3D 백엔드 (기본 dxvk)
             --gl zink|llvmpipe    OpenGL 백엔드
             --hud | --mangohud    FPS/프레임타임 오버레이
-            --no-desktop          Wine 가상 데스크톱 밖에서 실행
+            --no-desktop          (--desktop 모드에서) 가상 데스크톱 밖에서 실행
             --log                 Wine 로그를 파일로 저장
             --dry-run             실행 없이 환경/명령만 출력
+  app     add <이름> [run옵션] <exe>   DeX 바탕화면/위젯용 바로가기 + exe 아이콘
+          ls | rm <이름> | reset <이름>     목록 / 삭제 / 앱 레지스트리를 메인에서 다시 복사
+  ps                     DeX 창으로 실행 중인 앱
+  show    <앱>           닫았던(숨긴) DeX 창 다시 열기
+  close   [--force] <앱> 앱에 닫기 요청 (저장 확인이 뜨면 창을 앞으로). --force 는 즉시 종료
+  start   [--game] [--render PCT | --res WxH | --native] [--fullscreen]
+          [--shell desktop|openbox|none]
+          Windows 데스크톱 모드: 시작 메뉴·작업표시줄이 있는 Wine 데스크톱을 DeX 창 하나에
+            --game        게임 모드: 전체화면, 마우스 캡처, 스캔코드, 메타키 캡처
+            --render 75   네이티브 해상도의 75%로 렌더 후 확대 (GPU 부하↓)
+            --res 1600x900  고정 해상도
   info    <exe>          실행 파일 아키텍처(x64/x86/ARM64) 확인
+  fonts                  한글 글꼴 대체(맑은 고딕·굴림 등 → Noto Sans CJK KR) 다시 적용
+  locale  ko|off         한국어 Windows(코드페이지 949, 한국어 메뉴) 켜기/끄기 [실험적]
   dxvk    install|deploy|status   DXVK + VKD3D-Proton 설치/적용
   detect                 GPU/Vulkan 드라이버/CPU 클러스터 재탐지
   doctor                 성능 저하 원인 점검 (cpuset, 드라이버, 설정)
@@ -37,8 +49,7 @@ usage() {
   dpi     <96-288>       Wine 글꼴/UI 배율
   cfg                    winecfg 실행
   wine    <인자...>       환경이 적용된 wine 직접 실행 (예: s26dex wine taskmgr)
-  shortcut <이름> [run옵션] <exe>   Termux:Widget 바로가기 생성
-  kill                   Wine 프로세스 전부 종료
+  kill                   Wine 프로세스 전부 종료 (DeX 창 앱 포함)
   stop                   Wine + X 서버 + 오디오 종료
 EOF
 }
@@ -113,7 +124,8 @@ ensure_prefix() {
     ( wine_base_env; "$(wineserver_bin)" -w )
     ( wine_base_env
       # 게임 전체화면 시 마우스가 창 밖으로 나가지 않게
-      wine_reg 'HKCU\Software\Wine\X11 Driver' /v GrabFullscreen /t REG_SZ /d Y )
+      wine_reg 'HKCU\Software\Wine\X11 Driver' /v GrabFullscreen /t REG_SZ /d Y
+      apply_korean_fonts )
     ok "프리픽스 생성 완료"
   fi
   if ! dxvk_deployed && [ -d "$(dxvk_dir)" ]; then dxvk_deploy; fi
@@ -209,9 +221,11 @@ resolve_profile() { # 이름 또는 파일 경로 -> 파일
 
 cmd_run() {
   local profile="$S26_DEFAULT_PROFILE" emu32="" cores="" fps="" d3d="" gl="" hud=0 mango=0
-  local desktop="${S26_RUN_DESKTOP:-1}" log=0 dry=0
+  local desktop="${S26_RUN_DESKTOP:-1}" log=0 dry=0 mode=""
   while [ $# -gt 0 ]; do
     case "$1" in
+      --dex) mode=dex ;;
+      --desktop) mode=desktop ;;
       -p|--profile) profile="$2"; shift ;;
       --emu32) emu32="$2"; shift ;;
       --cores) cores="$2"; shift ;;
@@ -230,6 +244,12 @@ cmd_run() {
   done
   [ $# -ge 1 ] || die "실행할 파일을 지정하세요: s26dex run game.exe"
   local target="$1"; shift
+  # C:\... 경로는 메인 프리픽스의 실제 파일로 바꿔서 아키텍처 판별·DXVK·작업 폴더를 적용
+  if [[ "$target" =~ ^[Cc]:[\\/] ]]; then
+    local unixp="$S26_WINEPREFIX/drive_c/${target:3}"
+    unixp="${unixp//\\//}"
+    [ -e "$unixp" ] && target="$unixp"
+  fi
   if [ -e "$target" ]; then
     target="$(readlink -f "$target")"
   elif [[ ! "$target" =~ ^[A-Za-z]:[\\/] ]]; then
@@ -237,6 +257,14 @@ cmd_run() {
   fi
   local arch; arch="$(pe_arch "$target")"
   local base="${target##*/}"
+  # 설치 프로그램은 메인 프리픽스(Wine 데스크톱)에서 실행해야 레지스트리가 모든 앱에 공유됨
+  if [ -z "$mode" ]; then
+    case "${base,,}" in
+      *.msi|*setup*|*install*) mode=desktop ;;
+      *) mode="${S26_MODE:-dex}" ;;
+    esac
+  fi
+  [ "$mode" = dex ] && desktop=0
 
   [ "$dry" = 1 ] || require_termux
   mkdirs; load_device; wine_base_env
@@ -307,7 +335,7 @@ cmd_run() {
     x86_64) note="x64 → FEX(ARM64EC)" ;;
     x86) note="x86 → ${HODLL%.dll}" ;;
   esac
-  info "앱: $base [$arch${note:+, $note}]"
+  info "앱: $base [$arch${note:+, $note}]  모드: $( [ "$mode" = dex ] && echo "DeX 창 (컨테이너 $(slugify "$target"))" || echo "Wine 데스크톱")"
   info "프로필: ${pf##*/}  코어: ${cpus:-제한없음}  D3D: $d  GL: ${GALLIUM_DRIVER:-기본}  GPU: ${S26_VK_DEVICE:-?}"
 
   if [ "$dry" = 1 ]; then
@@ -323,9 +351,22 @@ cmd_run() {
     warn "→ Termux:X11 sharedUid APK 설치 필요 (docs/ANDROID-SETUP.md §2). 지금은 일부 코어만 사용됩니다."
   fi
 
+  if [ -d "$(dirname "$target")" ]; then cd "$(dirname "$target")" || true; fi
+
+  if [ "$mode" = dex ]; then
+    [ "$log" = 1 ] && export WINEDEBUG="err+all,fixme-all"
+    if [ "$log" = 1 ]; then
+      local dl; dl="$S26_LOG_DIR/${base%.*}-$(date +%Y%m%d-%H%M%S).log"
+      info "로그: $dl"
+      dex_launch "$(slugify "$target")" "${cmd[@]}" > >(tee "$dl") 2>&1
+    else
+      dex_launch "$(slugify "$target")" "${cmd[@]}"
+    fi
+    return
+  fi
+
   x11_running || cmd_start
   ensure_prefix
-  if [ -d "$(dirname "$target")" ]; then cd "$(dirname "$target")" || true; fi
 
   if [ "$log" = 1 ]; then
     local lf; lf="$S26_LOG_DIR/${base%.*}-$(date +%Y%m%d-%H%M%S).log"
@@ -370,7 +411,8 @@ cmd_doctor() {
 
   echo "== 패키지"
   local c
-  for c in termux-x11 termux-x11-preference hangover-wine vulkaninfo pulseaudio taskset zstd xrandr; do
+  for c in termux-x11 termux-x11-preference hangover-wine vulkaninfo pulseaudio taskset zstd xrandr \
+           openbox wmctrl xprop xwininfo wrestool icotool fc-list; do
     if have "$c"; then ok "$c"; else warn "$c 없음 — ./install.sh 재실행"; bad=1; fi
   done
   [ -x "$(wine_bin)" ] && ok "Hangover: $("$(wine_bin)" --version 2>/dev/null)" || { warn "Hangover Wine 없음"; bad=1; }
@@ -433,18 +475,126 @@ cmd_dpi() {
 
 cmd_wine() { load_device; wine_base_env; ensure_prefix; exec "$(wine_bin)" "$@"; }
 
-cmd_shortcut() {
-  [ $# -ge 2 ] || die "사용법: s26dex shortcut <이름> [run옵션] <exe>"
-  local name="$1"; shift
-  local dir="$HOME/.shortcuts/tasks"; mkdir -p "$dir"
-  local f="$dir/$name.sh" a args=()
-  for a in "$@"; do [ -e "$a" ] && a="$(readlink -f "$a")"; args+=("$a"); done
-  { echo "#!$PREFIX/bin/bash"; printf 'exec %q run' "$PREFIX/bin/s26dex"; printf ' %q' "${args[@]}"; echo; } > "$f"
-  chmod 700 "$f"
-  ok "바로가기 생성: $f (Termux:Widget 위젯에서 '$name' 선택)"
+# 앱 지정: 바로가기 이름 / exe 경로 / 컨테이너 id
+resolve_app() {
+  local a="$1" sc="$HOME/.shortcuts/tasks/$1.sh" exe
+  if [ -f "$sc" ]; then
+    exe="$(sed -n 's/^# s26dex-exe: //p' "$sc")"
+    [ -n "$exe" ] && { slugify "$exe"; return; }
+  fi
+  if [ -e "$a" ]; then slugify "$(readlink -f "$a")"; else echo "$a"; fi
 }
 
-cmd_kill() { load_device; wine_base_env; "$(wineserver_bin)" -k 2>/dev/null; ok "Wine 종료"; }
+extract_icon() { # exe png
+  have wrestool && have icotool || return 1
+  local t ico best
+  t="$(mktemp -d)" || return 1
+  wrestool -x -t 14 "$1" -o "$t/" >/dev/null 2>&1
+  ico="$(find "$t" -name '*.ico' | head -1)"
+  if [ -n "$ico" ]; then
+    best="$(icotool -l "$ico" 2>/dev/null | sed -n 's/.*--index=\([0-9]*\) --width=\([0-9]*\).*/\2 \1/p' | sort -n | tail -1 | cut -d' ' -f2)"
+    [ -n "$best" ] && icotool -x --index="$best" -o "$2" "$ico" >/dev/null 2>&1
+  fi
+  rm -rf "$t"
+  [ -s "$2" ]
+}
+
+cmd_app() {
+  local sub="${1:-ls}"; shift 2>/dev/null || true
+  local dir="$HOME/.shortcuts/tasks" icons="$HOME/.shortcuts/icons"
+  case "$sub" in
+    add)
+      [ $# -ge 2 ] || die "사용법: s26dex app add <이름> [run옵션] <exe>"
+      local name="$1"; shift
+      local a args=() exe=""
+      for a in "$@"; do
+        [ -e "$a" ] && a="$(readlink -f "$a")"
+        args+=("$a")
+        case "${a,,}" in *.exe|*.msi|*.bat|*.cmd|*.lnk) exe="$a" ;; esac
+      done
+      [ -n "$exe" ] || die "exe 경로를 찾지 못했습니다."
+      mkdir -p "$dir" "$icons"; chmod 700 "$HOME/.shortcuts" "$icons" 2>/dev/null
+      local f="$dir/$name.sh"
+      { echo "#!$PREFIX/bin/bash"
+        echo "# s26dex-exe: $exe"
+        printf 'exec %q run' "$PREFIX/bin/s26dex"; printf ' %q' "${args[@]}"; echo
+      } > "$f"
+      chmod 700 "$f"
+      ok "바로가기: $f"
+      if extract_icon "$exe" "$icons/$name.sh.png"; then
+        chmod 600 "$icons/$name.sh.png"; ok "아이콘: $icons/$name.sh.png"
+      else
+        warn "exe 에서 아이콘을 추출하지 못했습니다 (pkg install icoutils)."
+      fi
+      echo "  → 홈/DeX 화면 길게 누르기 > 위젯 > Termux:Widget 에서 '$name' 을 추가하면 아이콘으로 실행됩니다." ;;
+    ls)
+      local f n e
+      printf '%-20s %-6s %-8s %s
+' 이름 아이콘 상태 exe
+      for f in "$dir"/*.sh; do
+        [ -f "$f" ] || continue
+        e="$(sed -n 's/^# s26dex-exe: //p' "$f")"; [ -n "$e" ] || continue
+        n="$(basename "$f" .sh)"
+        printf '%-20s %-6s %-8s %s
+' "$n" "$( [ -f "$icons/$n.sh.png" ] && echo 있음 || echo -)" \
+          "$(dex_is_running "$(slugify "$e")" && echo 실행중 || echo -)" "$e"
+      done ;;
+    rm)
+      [ -n "${1:-}" ] || die "사용법: s26dex app rm <이름>"
+      rm -f "$dir/$1.sh" "$icons/$1.sh.png" && ok "삭제: $1 (앱 컨테이너는 유지 — 완전 삭제: rm -rf $S26_CONTAINERS/<id>)" ;;
+    reset)
+      [ -n "${1:-}" ] || die "사용법: s26dex app reset <이름|exe>"
+      local slug; slug="$(resolve_app "$1")"
+      dex_is_running "$slug" && die "$slug 실행 중 — 먼저 s26dex close $slug"
+      [ -d "$(container_prefix "$slug")" ] || die "컨테이너 없음: $slug"
+      container_copy_registry "$slug" && ok "$slug: 메인 프리픽스의 레지스트리로 다시 맞춤" ;;
+    *) die "s26dex app add|ls|rm|reset" ;;
+  esac
+}
+
+cmd_fonts() {
+  load_device
+  local c
+  ( wine_base_env; apply_korean_fonts ) && ok "메인 프리픽스 글꼴 대체 적용"
+  for c in "$S26_CONTAINERS"/*/prefix; do
+    [ -f "$c/system.reg" ] || continue
+    dex_is_running "$(basename "$(dirname "$c")")" && { warn "실행 중이라 건너뜀: $c"; continue; }
+    ( wine_base_env; export WINEPREFIX="$c"; apply_korean_fonts; "$(wineserver_bin)" -k 2>/dev/null ) && ok "적용: $c"
+  done
+}
+
+cmd_locale() {
+  case "${1:-status}" in
+    ko|ko_KR|ko_KR.UTF-8)
+      require_termux
+      have clang || { info "clang 설치 (심 빌드용, 1회)"; pkg install -y clang || die "clang 설치 실패"; }
+      mkdir -p "$(dirname "$S26_LOCALE_LIB")"
+      clang -shared -fPIC -O2 -o "$S26_LOCALE_LIB" "$S26_ROOT/lib/s26locale.c" -ldl || die "심 빌드 실패"
+      config_set S26_LOCALE ko_KR.UTF-8
+      ok "한국어 로캘 켜짐 (코드페이지 949). 실행 중인 Wine 은 s26dex kill 후 적용됩니다." ;;
+    off) config_set S26_LOCALE "" && ok "한국어 로캘 꺼짐" ;;
+    status) echo "S26_LOCALE=${S26_LOCALE:-(없음)}  심: $( [ -f "$S26_LOCALE_LIB" ] && echo "$S26_LOCALE_LIB" || echo 없음)" ;;
+    *) die "s26dex locale ko|off|status" ;;
+  esac
+}
+
+cmd_dex_each() { # 실행 중인 DeX 앱마다 함수 실행
+  local d slug
+  for d in "$S26_CONTAINERS"/*/; do
+    [ -d "$d" ] || continue
+    slug="$(basename "$d")"
+    dex_is_running "$slug" && "$@" "$slug"
+  done
+}
+
+dex_kill_one() { WINEPREFIX="$(container_prefix "$1")" "$(wineserver_bin)" -k 2>/dev/null; }
+
+cmd_kill() {
+  load_device; wine_base_env
+  "$(wineserver_bin)" -k 2>/dev/null
+  cmd_dex_each dex_kill_one
+  ok "Wine 종료"
+}
 
 cmd_stop() {
   cmd_kill
@@ -468,7 +618,15 @@ main() {
     dpi) cmd_dpi "$@" ;;
     cfg) cmd_wine winecfg ;;
     wine) cmd_wine "$@" ;;
-    shortcut) cmd_shortcut "$@" ;;
+    app) cmd_app "$@" ;;
+    shortcut) cmd_app add "$@" ;;
+    ps) dex_list ;;
+    show) [ -n "${1:-}" ] || die "사용법: s26dex show <앱>"; dex_show "$(resolve_app "$1")" || die "실행 중이 아님: $1" ;;
+    close)
+      if [ "${1:-}" = --force ]; then shift; [ -n "${1:-}" ] || die "사용법: s26dex close [--force] <앱>"; dex_close "$(resolve_app "$1")" force
+      else [ -n "${1:-}" ] || die "사용법: s26dex close [--force] <앱>"; dex_close "$(resolve_app "$1")"; fi ;;
+    fonts) cmd_fonts ;;
+    locale) cmd_locale "$@" ;;
     kill) cmd_kill ;;
     stop) cmd_stop ;;
     help|-h|--help) usage ;;
