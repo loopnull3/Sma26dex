@@ -12,6 +12,20 @@ Termux:X11 바깥에서는 알 방법이 없기 때문입니다. `0001-sma26dex-
 
 기준: termux/termux-x11 `24ce2076` (2026-11-23). 원본 동작은 바꾸지 않습니다 — 새 extra 가 없거나 태그 없는 기본 창이면 이전과 같습니다.
 
+## 빌드 기록 (2026-11-26)
+
+| 항목 | 값 |
+|---|---|
+| 기준 | termux/termux-x11 `24ce2076` + 이 패치 |
+| versionName / versionCode | `1.03.01-24ce207-26.11.26` / 15 (공식 nightly 와 같은 코드 → 업데이트 설치 가능) |
+| 서명 인증서 SHA-256 | `b6da01480eefd5fbf2cd3771b8d1021ec791304bdd6c4bf41d3faabad48ee5e1` (공식 nightly 와 동일) |
+| `termux-x11-s26dex-sharedUid.apk` SHA-256 | `27ef0848bbfbf35860b9eca5fb0a9de4846513bb4a4131f2c0a9139b35c73759` |
+| `termux-x11-s26dex-standalone.apk` SHA-256 | `ebb6f99cb855b30edbf8e9aad64b8782e5c48535a2ee368951b54f1359280106` |
+
+빌드 후 확인: `sharedUserId=com.termux`, 매니페스트에 `WindowsFileActivity`·exe/msi MIME·`ACTION_SET_TASK_DESCRIPTION`·`RUN_COMMAND` 권한,
+dex 에 `windowClosed`·`TERMUX_X11_WINDOW_CLOSED_CMD`·RUN_COMMAND extra, 한국어 라벨 "Windows 프로그램 실행".
+폰 설치·실행은 아직 확인하지 않았습니다.
+
 ## 빌드
 
 PC(Linux/macOS/WSL)에서 Android SDK 와 NDK 를 설치한 뒤:
