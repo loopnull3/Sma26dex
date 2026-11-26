@@ -592,6 +592,7 @@ cmd_open() {
 cmd_vkdebug() {
   require_termux
   local out="$HOME/s26dex-vkdebug.txt" icd
+  # shellcheck disable=SC2012  # 사람이 읽는 목록 출력
   {
     echo "== 기기: $(getprop ro.product.model) Android $(getprop ro.build.version.release) / $(getprop ro.soc.model) / vulkan=$(getprop ro.hardware.vulkan) egl=$(getprop ro.hardware.egl)"
     echo "== 패키지"
