@@ -47,6 +47,7 @@ usage() {
   dxvk    install|deploy|status   DXVK + VKD3D-Proton 설치/적용
   detect                 GPU/Vulkan 드라이버/CPU 클러스터 재탐지
   doctor                 성능 저하 원인 점검 (cpuset, 드라이버, 설정)
+  vkdebug                Vulkan 드라이버 진단 (~/s26dex-vkdebug.txt 에 저장)
   status                 실행 중인 Wine 프로세스와 사용 코어
   dpi     <96-288>       Wine 글꼴/UI 배율
   cfg                    winecfg 실행
@@ -441,7 +442,9 @@ cmd_doctor() {
 
   echo "== Termux:X11 패치판(sharedUid) 설치 조건"
   local rel t_uid x_uid
-  rel="${TERMUX_APP__APK_RELEASE:-알 수 없음}"
+  # Termux 0.119+ 는 TERMUX_APP__APK_RELEASE, 0.118 은 TERMUX_APK_RELEASE
+  rel="${TERMUX_APP__APK_RELEASE:-${TERMUX_APK_RELEASE:-알 수 없음}}"
+  case "${rel,,}" in github*) rel=Github ;; esac
   t_uid="$(/system/bin/pm list packages -U 2>/dev/null | sed -n 's/^package:com\.termux uid:\([0-9]*\).*/\1/p')"
   x_uid="$(/system/bin/pm list packages -U 2>/dev/null | sed -n 's/^package:com\.termux\.x11 uid:\([0-9]*\).*/\1/p')"
   echo "  Termux 배포판: $rel   UID: Termux=${t_uid:-?} Termux:X11=${x_uid:-미설치}"
@@ -585,6 +588,33 @@ cmd_open() {
   } >>"$lf" 2>&1
 }
 
+# Vulkan 드라이버 진단 — 결과를 ~/s26dex-vkdebug.txt 에도 저장
+cmd_vkdebug() {
+  require_termux
+  local out="$HOME/s26dex-vkdebug.txt" icd
+  {
+    echo "== 기기: $(getprop ro.product.model) Android $(getprop ro.build.version.release) / $(getprop ro.soc.model) / vulkan=$(getprop ro.hardware.vulkan) egl=$(getprop ro.hardware.egl)"
+    echo "== 패키지"
+    dpkg -l 2>/dev/null | awk '/vulkan|mesa|wrapper|adrenotools/{print "  " $2 " " $3}'
+    echo "== ICD 파일 ($(icd_dir))"
+    ls -l "$(icd_dir)" 2>&1 | sed 's/^/  /'
+    echo "== 시스템 Vulkan"
+    ls -l /system/lib64/libvulkan.so /vendor/lib64/hw/vulkan.*.so 2>&1 | sed 's/^/  /'
+    for icd in "$(icd_dir)"/*.json; do
+      [ -e "$icd" ] || continue
+      echo "== vulkaninfo --summary  [${icd##*/}]"
+      VK_ICD_FILENAMES="$icd" VK_DRIVER_FILES="$icd" VK_LOADER_DEBUG=error,warn \
+        timeout 30 vulkaninfo --summary 2>&1 | head -45 | sed 's/^/  /'
+      echo "  (종료 코드 ${PIPESTATUS[0]})"
+    done
+    echo "== vulkaninfo --summary  [ICD 지정 없음]"
+    VK_LOADER_DEBUG=error,warn timeout 30 vulkaninfo --summary 2>&1 | head -30 | sed 's/^/  /'
+    echo "  (종료 코드 ${PIPESTATUS[0]})"
+  } 2>&1 | tee "$out"
+  echo
+  ok "저장: $out"
+}
+
 cmd_fonts() {
   load_device
   local c
@@ -660,6 +690,7 @@ main() {
       else [ -n "${1:-}" ] || die "사용법: s26dex close [--force] <앱>"; dex_close "$(resolve_app "$1")"; fi ;;
     fonts) cmd_fonts ;;
     open) cmd_open "$@" ;;
+    vkdebug) cmd_vkdebug ;;
     locale) cmd_locale "$@" ;;
     kill) cmd_kill ;;
     stop) cmd_stop ;;
