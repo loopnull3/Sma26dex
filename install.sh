@@ -8,8 +8,12 @@ require_termux
 mkdirs
 
 info "1/5 패키지 저장소 갱신"
+# 전체 업그레이드 먼저 — 새로 깐 Termux(오래된 기본 패키지)에서 일부만 올라가면
+# libcurl 과 openssl 버전이 어긋나 git/curl 이 "cannot locate symbol" 로 깨짐
 pkg update -y
+pkg upgrade -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
 pkg install -y x11-repo
+pkg upgrade -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold
 
 info "2/5 패키지 설치 (Hangover Wine + Termux:X11 + Vulkan 드라이버)"
 # hangover = hangover-wine(11.x, i386/aarch64/arm64ec) + FEX(ARM64EC·WoW64) + Box64(WoW64)
