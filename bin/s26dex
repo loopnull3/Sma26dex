@@ -17,6 +17,7 @@ usage() {
   run     [옵션] <파일.exe|.msi|.bat|.lnk> [인자...]
           기본: 앱마다 독립된 DeX 창으로 실행 (DeX 작업표시줄·Alt+Tab·창 크기 조절)
             --dex                 DeX 창 모드 (기본)
+            --label <이름>        DeX 창/작업표시줄에 보일 이름 (기본: exe 이름)
             --desktop             Wine 데스크톱(시작 메뉴/작업표시줄) 안에서 실행 — 설치 프로그램 기본값
             -p, --profile compat|balanced|performance|extreme  (기본: performance)
             --emu32 box64|fex     32비트 x86 에뮬레이터 (기본 box64)
@@ -39,6 +40,7 @@ usage() {
             --game        게임 모드: 전체화면, 마우스 캡처, 스캔코드, 메타키 캡처
             --render 75   네이티브 해상도의 75%로 렌더 후 확대 (GPU 부하↓)
             --res 1600x900  고정 해상도
+  open    <파일>         내 파일 등에서 연 exe/msi 실행 (패치판 Termux:X11 이 호출, 로그는 ~/.cache/sma26dex/logs)
   info    <exe>          실행 파일 아키텍처(x64/x86/ARM64) 확인
   fonts                  한글 글꼴 대체(맑은 고딕·굴림 등 → Noto Sans CJK KR) 다시 적용
   locale  ko|off         한국어 Windows(코드페이지 949, 한국어 메뉴) 켜기/끄기 [실험적]
@@ -221,9 +223,10 @@ resolve_profile() { # 이름 또는 파일 경로 -> 파일
 
 cmd_run() {
   local profile="$S26_DEFAULT_PROFILE" emu32="" cores="" fps="" d3d="" gl="" hud=0 mango=0
-  local desktop="${S26_RUN_DESKTOP:-1}" log=0 dry=0 mode=""
+  local desktop="${S26_RUN_DESKTOP:-1}" log=0 dry=0 mode="" label=""
   while [ $# -gt 0 ]; do
     case "$1" in
+      --label) label="$2"; shift ;;
       --dex) mode=dex ;;
       --desktop) mode=desktop ;;
       -p|--profile) profile="$2"; shift ;;
@@ -320,7 +323,8 @@ cmd_run() {
   local cmd=()
   [ -n "$cpus" ] && have taskset && cmd+=(taskset -c "$cpus")
   cmd+=("$(wine_bin)")
-  [ "$desktop" = 1 ] && cmd+=(explorer "/desktop=$S26_DESKTOP_NAME,$( [ "$dry" = 1 ] && echo 1920x1080 || x11_size)")
+  # 데스크톱 크기는 X 서버를 띄운 뒤에 정함 (먼저 계산하면 빈 값 → Wine 기본 800x600)
+  [ "$desktop" = 1 ] && cmd+=(explorer "@DESKTOP@")
   case "${target,,}" in
     *.msi) cmd+=(msiexec /i "$target") ;;
     *.bat|*.cmd) cmd+=(cmd /c "$target") ;;
@@ -339,6 +343,7 @@ cmd_run() {
   info "프로필: ${pf##*/}  코어: ${cpus:-제한없음}  D3D: $d  GL: ${GALLIUM_DRIVER:-기본}  GPU: ${S26_VK_DEVICE:-?}"
 
   if [ "$dry" = 1 ]; then
+    cmd=("${cmd[@]/#@DESKTOP@//desktop=$S26_DESKTOP_NAME,1920x1080}")
     env | grep -E '^(FEX_|BOX64_|HODLL|WINE|DXVK_|VKD3D|MESA_|GALLIUM|VK_|TU_|vblank|MANGOHUD|LIBGL)' | sort
     printf '명령:'; printf ' %q' "${cmd[@]}"; echo
     return 0
@@ -354,19 +359,26 @@ cmd_run() {
   if [ -d "$(dirname "$target")" ]; then cd "$(dirname "$target")" || true; fi
 
   if [ "$mode" = dex ]; then
+    local slug; slug="$(slugify "$target")"
+    # DeX 창 이름/아이콘: --label(바로가기 이름) 또는 exe 이름, 아이콘은 exe 에서 1회 추출
+    export S26_DEX_LABEL="${label:-${base%.*}}"
+    mkdir -p "$(container_dir "$slug")"
+    [ -s "$(container_dir "$slug")/icon.png" ] || extract_icon "$target" "$(container_dir "$slug")/icon.png" 128 || true
     [ "$log" = 1 ] && export WINEDEBUG="err+all,fixme-all"
     if [ "$log" = 1 ]; then
       local dl; dl="$S26_LOG_DIR/${base%.*}-$(date +%Y%m%d-%H%M%S).log"
       info "로그: $dl"
-      dex_launch "$(slugify "$target")" "${cmd[@]}" > >(tee "$dl") 2>&1
+      dex_launch "$slug" "${cmd[@]}" > >(tee "$dl") 2>&1
     else
-      dex_launch "$(slugify "$target")" "${cmd[@]}"
+      dex_launch "$slug" "${cmd[@]}"
     fi
     return
   fi
 
   x11_running || cmd_start
   ensure_prefix
+  local size; size="$(x11_size)"
+  cmd=("${cmd[@]/#@DESKTOP@//desktop=$S26_DESKTOP_NAME,${size:-1920x1080}}")
 
   if [ "$log" = 1 ]; then
     local lf; lf="$S26_LOG_DIR/${base%.*}-$(date +%Y%m%d-%H%M%S).log"
@@ -443,6 +455,11 @@ cmd_doctor() {
     false) ok "팬텀 프로세스 킬러 꺼짐" ;;
     true|null|"") warn "팬텀 프로세스 킬러 상태: ${ph:-확인불가} → 개발자 옵션 '하위 프로세스 제한 사용 중지' 켜기" ;;
   esac
+  if grep -Eq '^[[:space:]]*allow-external-apps[[:space:]]*=[[:space:]]*true' "$HOME/.termux/termux.properties" 2>/dev/null; then
+    ok "allow-external-apps = true (내 파일에서 exe/msi 열기 가능)"
+  else
+    warn "allow-external-apps 꺼짐 → 내 파일에서 exe/msi 열기 불가 (./install.sh 재실행)"
+  fi
   [ -r /dev/kvm ] && echo "  /dev/kvm 접근 가능 (VM 가속 가능)" || echo "  /dev/kvm 접근 불가 → Windows VM(QEMU)은 순수 에뮬레이션이라 비추천"
 
   echo "== 저장공간"
@@ -485,19 +502,6 @@ resolve_app() {
   if [ -e "$a" ]; then slugify "$(readlink -f "$a")"; else echo "$a"; fi
 }
 
-extract_icon() { # exe png
-  have wrestool && have icotool || return 1
-  local t ico best
-  t="$(mktemp -d)" || return 1
-  wrestool -x -t 14 "$1" -o "$t/" >/dev/null 2>&1
-  ico="$(find "$t" -name '*.ico' | head -1)"
-  if [ -n "$ico" ]; then
-    best="$(icotool -l "$ico" 2>/dev/null | sed -n 's/.*--index=\([0-9]*\) --width=\([0-9]*\).*/\2 \1/p' | sort -n | tail -1 | cut -d' ' -f2)"
-    [ -n "$best" ] && icotool -x --index="$best" -o "$2" "$ico" >/dev/null 2>&1
-  fi
-  rm -rf "$t"
-  [ -s "$2" ]
-}
 
 cmd_app() {
   local sub="${1:-ls}"; shift 2>/dev/null || true
@@ -517,7 +521,7 @@ cmd_app() {
       local f="$dir/$name.sh"
       { echo "#!$PREFIX/bin/bash"
         echo "# s26dex-exe: $exe"
-        printf 'exec %q run' "$PREFIX/bin/s26dex"; printf ' %q' "${args[@]}"; echo
+        printf 'exec %q run --label %q' "$PREFIX/bin/s26dex" "$name"; printf ' %q' "${args[@]}"; echo
       } > "$f"
       chmod 700 "$f"
       ok "바로가기: $f"
@@ -550,6 +554,19 @@ cmd_app() {
       container_copy_registry "$slug" && ok "$slug: 메인 프리픽스의 레지스트리로 다시 맞춤" ;;
     *) die "s26dex app add|ls|rm|reset" ;;
   esac
+}
+
+# 파일 관리자(내 파일 등)에서 연 Windows 프로그램 — 패치판 Termux:X11 이 RUN_COMMAND 로 호출
+# 설치 프로그램(.msi, *setup*, *install*)은 Wine 데스크톱에서, 나머지는 DeX 창으로 실행
+cmd_open() {
+  [ $# -ge 1 ] || die "사용법: s26dex open <파일>"
+  mkdirs
+  local lf; lf="$S26_LOG_DIR/open-$(date +%Y%m%d-%H%M%S).log"
+  {
+    echo "== s26dex open $*"
+    have termux-wake-lock && termux-wake-lock
+    cmd_run "$@"
+  } >>"$lf" 2>&1
 }
 
 cmd_fonts() {
@@ -626,6 +643,7 @@ main() {
       if [ "${1:-}" = --force ]; then shift; [ -n "${1:-}" ] || die "사용법: s26dex close [--force] <앱>"; dex_close "$(resolve_app "$1")" force
       else [ -n "${1:-}" ] || die "사용법: s26dex close [--force] <앱>"; dex_close "$(resolve_app "$1")"; fi ;;
     fonts) cmd_fonts ;;
+    open) cmd_open "$@" ;;
     locale) cmd_locale "$@" ;;
     kill) cmd_kill ;;
     stop) cmd_stop ;;

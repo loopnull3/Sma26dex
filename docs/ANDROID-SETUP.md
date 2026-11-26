@@ -57,9 +57,13 @@ Termux만으로 하려면 `pkg install android-tools`를 설치하고 개발자 
 - Windows 앱마다 **별도 DeX 창**이 열립니다. DeX 작업표시줄에 따로 잡히고 Alt+Tab으로 전환됩니다.
 - 창 크기를 바꾸거나 최대화하면 1초 안에 앱 화면이 그 크기로 다시 맞춰집니다.
 - 이 모드에서는 Termux:X11 설정을 `native` 해상도, 마우스 캡처 끔, DeX 단축키 가로채기 끔으로 맞춥니다.
-  Alt+Tab, Meta 키 같은 DeX 단축키는 DeX가 처리하고, Alt+F4는 DeX 창을 닫습니다
-  (앱은 계속 실행되므로 아이콘이나 `s26dex show <앱>`으로 다시 엽니다).
-- DeX 제목표시줄에는 "Termux:X11"이 표시됩니다.
+  Alt+Tab, Meta 키 같은 DeX 단축키는 DeX가 처리합니다.
+- **패치판 Termux:X11**([termux-x11/](../termux-x11/README.md))이면:
+  - DeX 제목표시줄·작업표시줄에 앱 이름과 exe 아이콘이 붙고 Windows 창 제목을 따라갑니다.
+  - ✕ / Alt+F4는 Windows처럼 앱에 닫기를 요청합니다. 저장 확인이 뜨면 DeX 창이 다시 열립니다.
+  - 내 파일에서 `.exe`/`.msi`를 누르면 "Windows 프로그램 실행"으로 바로 실행·설치됩니다
+    (`~/.termux/termux.properties`의 `allow-external-apps = true` 필요 — `install.sh`가 설정).
+- 공식 Termux:X11이면 제목은 "Termux:X11"이고, ✕는 DeX 창만 닫습니다(앱은 계속 실행 → 아이콘이나 `s26dex show <앱>`).
 
 ### Windows 데스크톱 모드 (`s26dex start`, 설치 프로그램)
 - DeX 창 하나 안에 시작 메뉴와 작업표시줄이 있는 Wine 데스크톱을 띄웁니다.

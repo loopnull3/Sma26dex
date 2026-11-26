@@ -1,7 +1,8 @@
 # Sma26dex — Galaxy S26 DeX에서 Windows 앱을 DeX 앱처럼
 
 Galaxy S26을 DeX(모니터·키보드·마우스)로 쓰면서 Windows `.exe`를 **앱 하나 = DeX 창 하나**로 실행합니다.
-Windows 앱이 DeX 작업표시줄에 따로 잡히고, Alt+Tab으로 전환되고, DeX 창 크기를 바꾸면 앱 화면도 같이 바뀝니다.
+Windows 앱이 DeX 작업표시줄에 **자기 이름과 아이콘으로** 따로 잡히고, Alt+Tab으로 전환되고, DeX 창 크기를 바꾸면 앱 화면도 같이 바뀝니다.
+DeX 창의 ✕는 Windows처럼 앱을 닫고(저장 확인이 뜨면 물어봄), **내 파일에서 `.exe`/`.msi`를 누르면 바로 실행·설치**됩니다.
 리눅스 데스크톱이나 "X11 화면 안의 Windows 화면"은 보이지 않습니다.
 
 Termux 네이티브로만 구성했고, Ubuntu·PRoot·chroot·루트는 쓰지 않습니다.
@@ -36,7 +37,7 @@ Termux 네이티브로만 구성했고, Ubuntu·PRoot·chroot·루트는 쓰지 
 | 앱 | 받는 곳 | 비고 |
 |---|---|---|
 | Termux | github.com/termux/termux-app 릴리스 | |
-| Termux:X11 | github.com/termux/termux-x11 `nightly` 태그 | **`termux-x11-universal-sharedUid-release.apk`** 권장 ([이유](docs/ANDROID-SETUP.md#2-가장-중요-termuxx11-shareduid)) |
+| Termux:X11 | **Sma26dex 패치판** ([termux-x11/](termux-x11/README.md)에서 빌드) 또는 공식 `nightly` | sharedUid 판 권장 ([이유](docs/ANDROID-SETUP.md#2-가장-중요-termuxx11-shareduid)). 창 이름·아이콘, ✕로 앱 닫기, 내 파일 연동은 패치판에서만 동작 |
 | Termux:Widget | github.com/termux/termux-widget | 앱 아이콘 바로가기 |
 
 ### Termux에서
@@ -72,14 +73,27 @@ exe 안의 **실제 프로그램 아이콘**을 추출해서 Termux:Widget 바�
 홈 화면에 Termux:Widget 위젯이나 바로가기를 추가하면 그 아이콘으로 실행됩니다.
 바로가기는 백그라운드 작업이라 Termux 창이 뜨지 않습니다.
 
-### 창 닫기와 다시 열기
+### 창 이름·아이콘
+
+DeX 제목표시줄과 작업표시줄에 **바로가기 이름(또는 exe 이름)과 exe 아이콘**이 붙고,
+실행 중에는 Windows 창 제목을 따라갑니다(예: `보고서.txt - 메모장`). 이름은 `s26dex run --label 이름`으로도 정합니다.
+
+### 창 닫기 (Windows와 같은 동작)
 
 | 동작 | 결과 |
 |---|---|
-| 앱 안에서 종료(파일 → 끝내기 / Alt+F4) | 앱과 DeX 창이 함께 닫히고 정리됩니다 |
-| DeX 제목표시줄의 ✕ | **DeX 창만 닫히고 앱은 계속 실행됩니다.** 같은 아이콘을 누르거나 `s26dex show <앱>`으로 다시 엽니다 |
-| `s26dex close <앱>` | Windows처럼 닫기를 요청합니다. "저장할까요?"가 뜨면 창을 앞으로 가져와 답을 기다립니다 |
-| `s26dex close --force <앱>` | 즉시 종료합니다 |
+| DeX 제목표시줄 ✕ / Alt+F4 | 앱에 닫기 요청(WM_CLOSE). 바로 끝나면 DeX 창과 함께 정리됩니다 |
+| └ 저장하지 않은 내용이 있을 때 | 앱이 "저장할까요?"를 띄우고 **DeX 창이 다시 열려** 답할 수 있습니다 |
+| └ 트레이로 숨는 앱 | Windows처럼 창 없이 계속 실행합니다. `s26dex show <앱>`으로 다시 엽니다 |
+| 앱 안에서 종료(파일 → 끝내기) | 앱과 DeX 창이 함께 닫힙니다 |
+| `s26dex close [--force] <앱>` | 터미널에서 닫기 요청 / 즉시 종료 |
+
+### 내 파일에서 바로 실행·설치
+
+내 파일(또는 다른 파일 관리자)에서 `.exe` `.msi` `.bat` `.lnk`를 누르고 **"Windows 프로그램 실행"**을 고르면(한 번 "항상"으로 지정),
+설치 프로그램은 설치 창이 바로 뜨고, 일반 프로그램은 자기 DeX 창으로 열립니다.
+파일 위치를 알 수 있으면 그 폴더에서 그대로 실행하고(옆의 DLL 사용), 알 수 없으면 `~/Downloads/Windows/`로 복사해 실행합니다.
+로그: `~/.cache/sma26dex/logs/open-*.log`
 
 ### 설치 프로그램과 Windows 데스크톱 모드
 
@@ -150,9 +164,13 @@ Termux(bionic)에서는 `setlocale()`이 항상 `C.UTF-8`을 돌려주고, Wine�
 **폰에서 아직 확인하지 못한 것:** Termux:X11 `-tag` 창의 DeX 동작, Hangover(ARM64) 고유 동작, 대화상자 내용 렌더링입니다.
 대화상자는 테스트 X 서버에서 검게 나왔는데, WM도 설정도 없는 순정 Wine에서도 똑같이 재현되므로 DeX 창 모드와는 무관해 보입니다.
 
+패치판 Termux:X11은 소스 패치가 원본 커밋에 깨끗하게 적용되는 것까지만 확인했고, **APK는 아직 빌드하지 않았습니다.**
+s26dex 쪽(이름·아이콘 extra 전달, 제목 동기화 브로드캐스트, ✕ 신호 → 닫기 요청 → 저장 확인 시 창 다시 열기, `s26dex open`의 설치/일반 분기)은 Termux:X11 대역으로 시험했습니다.
+
 ## 알려진 한계
 
-- DeX 제목표시줄과 작업표시줄 아이콘은 앱 이름이 아니라 **"Termux:X11"로 표시**됩니다. Termux:X11이 `-tag` 창마다 작업 이름을 지정하지 않기 때문입니다.
+- 창 이름·아이콘, ✕로 앱 닫기, 내 파일 연동은 **패치판 Termux:X11**이 필요합니다. 공식 앱에서는 "Termux:X11"로 표시되고 ✕가 창만 닫습니다.
+- DeX가 작업 이름·아이콘(TaskDescription)을 제목표시줄과 작업표시줄에 그대로 보여주는지는 폰에서 확인이 필요합니다(최근 앱 목록에는 반영되는 Android 표준 방식).
 - 앱마다 Wine 인스턴스가 따로 떠서 앱당 메모리를 100~200MB 정도 더 씁니다.
 - DeX 창 모드에서는 앱 컨테이너의 Win32 제목표시줄 지표를 1px로 줄입니다(전체 채우기를 위해). 그래서 MDI(창 안의 창) 앱은 내부 창 제목이 얇게 보입니다. `S26_DEX_THIN_CAPTION=0`을 설정한 뒤 `s26dex app reset <앱>`으로 끌 수 있습니다.
 - 커널 안티치트 게임, 국내 인터넷뱅킹·공공기관 보안 프로그램(드라이버 기반)은 동작하지 않습니다.

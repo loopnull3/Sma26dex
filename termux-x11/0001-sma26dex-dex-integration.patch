@@ -1,0 +1,489 @@
+From 23aa024ab15ddb405766850782433c0d052a4aee Mon Sep 17 00:00:00 2001
+From: s26dex <s26dex@localhost>
+Date: Thu, 26 Nov 2026 03:49:54 +0000
+Subject: [PATCH] Sma26dex: DeX task label/icon, window-closed hook, open
+ Windows programs from file managers
+
+---
+ lorie/src/main/AndroidManifest.xml            |  47 +++++
+ .../com/termux/x11/ICmdEntryInterface.aidl    |   2 +
+ .../java/com/termux/x11/CmdEntryPoint.java    |  18 ++
+ .../main/java/com/termux/x11/LorieApp.java    |   9 +-
+ .../java/com/termux/x11/MainActivity.java     |  65 +++++-
+ .../com/termux/x11/WindowsFileActivity.java   | 185 ++++++++++++++++++
+ lorie/src/main/res/values-ko/s26_strings.xml  |   9 +
+ lorie/src/main/res/values/s26_strings.xml     |   9 +
+ 8 files changed, 342 insertions(+), 2 deletions(-)
+ create mode 100644 lorie/src/main/java/com/termux/x11/WindowsFileActivity.java
+ create mode 100644 lorie/src/main/res/values-ko/s26_strings.xml
+ create mode 100644 lorie/src/main/res/values/s26_strings.xml
+
+diff --git a/lorie/src/main/AndroidManifest.xml b/lorie/src/main/AndroidManifest.xml
+index 0ad222a..d39e807 100644
+--- a/lorie/src/main/AndroidManifest.xml
++++ b/lorie/src/main/AndroidManifest.xml
+@@ -7,6 +7,8 @@
+     <uses-permission android:name="android.permission.INTERNET" />
+     <uses-permission android:name="android.permission.WRITE_SECURE_SETTINGS" tools:ignore="ProtectedPermissions" />
+     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
++    <!-- Sma26dex: start "s26dex open <file>" in Termux (automatically granted for the sharedUid build) -->
++    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />
+ 
+     <application
+         android:name=".LorieApp"
+@@ -85,8 +87,53 @@
+                 <action android:name="com.termux.x11.ACTION_STOP" />
+                 <action android:name="com.termux.x11.ACTION_PREFERENCES_CHANGED" />
+                 <action android:name="com.termux.x11.ACTION_CUSTOM" />
++                <action android:name="com.termux.x11.ACTION_SET_TASK_DESCRIPTION" />
+             </intent-filter>
+         </receiver>
++
++        <!-- Sma26dex: open .exe/.msi/.bat/.lnk from file managers (e.g. Samsung My Files) through Termux -->
++        <activity
++            android:name=".WindowsFileActivity"
++            android:label="@string/s26_open_windows_program"
++            android:icon="@mipmap/lorie_ic_launcher"
++            android:theme="@android:style/Theme.Translucent.NoTitleBar"
++            android:excludeFromRecents="true"
++            android:noHistory="true"
++            android:taskAffinity=".WindowsFileActivity"
++            android:exported="true">
++            <intent-filter>
++                <action android:name="android.intent.action.VIEW" />
++                <category android:name="android.intent.category.DEFAULT" />
++                <data android:scheme="content" />
++                <data android:scheme="file" />
++                <data android:mimeType="application/x-msdownload" />
++                <data android:mimeType="application/x-msdos-program" />
++                <data android:mimeType="application/x-ms-dos-executable" />
++                <data android:mimeType="application/vnd.microsoft.portable-executable" />
++                <data android:mimeType="application/x-dosexec" />
++                <data android:mimeType="application/x-msi" />
++                <data android:mimeType="application/x-ms-installer" />
++                <data android:mimeType="application/x-ole-storage" />
++                <data android:mimeType="application/x-bat" />
++                <data android:mimeType="application/x-ms-shortcut" />
++                <data android:mimeType="application/octet-stream" />
++            </intent-filter>
++            <intent-filter>
++                <action android:name="android.intent.action.SEND" />
++                <category android:name="android.intent.category.DEFAULT" />
++                <data android:mimeType="application/x-msdownload" />
++                <data android:mimeType="application/x-msdos-program" />
++                <data android:mimeType="application/x-ms-dos-executable" />
++                <data android:mimeType="application/vnd.microsoft.portable-executable" />
++                <data android:mimeType="application/x-dosexec" />
++                <data android:mimeType="application/x-msi" />
++                <data android:mimeType="application/x-ms-installer" />
++                <data android:mimeType="application/x-ole-storage" />
++                <data android:mimeType="application/x-bat" />
++                <data android:mimeType="application/x-ms-shortcut" />
++                <data android:mimeType="application/octet-stream" />
++            </intent-filter>
++        </activity>
+     </application>
+     <queries>
+         <package android:name="com.termux" />
+diff --git a/lorie/src/main/aidl/com/termux/x11/ICmdEntryInterface.aidl b/lorie/src/main/aidl/com/termux/x11/ICmdEntryInterface.aidl
+index c73edca..669e48a 100644
+--- a/lorie/src/main/aidl/com/termux/x11/ICmdEntryInterface.aidl
++++ b/lorie/src/main/aidl/com/termux/x11/ICmdEntryInterface.aidl
+@@ -7,4 +7,6 @@ interface ICmdEntryInterface {
+     void reportFatalError(String message);
+     void windowChanged(in Surface surface);
+     void cursorWindowChanged(in Surface surface);
++    // Sma26dex: a "-tag" window was closed by the user (DeX caption close button, Alt+F4, recents).
++    oneway void windowClosed();
+ }
+\ No newline at end of file
+diff --git a/lorie/src/main/java/com/termux/x11/CmdEntryPoint.java b/lorie/src/main/java/com/termux/x11/CmdEntryPoint.java
+index 6196631..d7d94e0 100644
+--- a/lorie/src/main/java/com/termux/x11/CmdEntryPoint.java
++++ b/lorie/src/main/java/com/termux/x11/CmdEntryPoint.java
+@@ -183,6 +183,24 @@ public class CmdEntryPoint extends ICmdEntryInterface.Stub {
+     public native ParcelFileDescriptor getXConnection();
+     public native ParcelFileDescriptor getLogcatOutput();
+     public native void reportFatalError(String message);
++
++    /**
++     * Sma26dex: called by a "-tag" window when the user closes it.
++     * Runs $TERMUX_X11_WINDOW_CLOSED_CMD (set by whoever started this X server) so the
++     * program shown in the window can be asked to close, like a desktop window manager would.
++     */
++    @Override
++    public void windowClosed() {
++        System.err.println("termux-x11: window closed by user");
++        String cmd = System.getenv("TERMUX_X11_WINDOW_CLOSED_CMD");
++        if (cmd == null || cmd.isEmpty())
++            return;
++        try {
++            new ProcessBuilder("/system/bin/sh", "-c", cmd).redirectErrorStream(true).start();
++        } catch (Exception e) {
++            android.util.Log.e("CmdEntryPoint", "TERMUX_X11_WINDOW_CLOSED_CMD failed", e);
++        }
++    }
+     @CriticalNative private static native boolean connected();
+ 
+     static {
+diff --git a/lorie/src/main/java/com/termux/x11/LorieApp.java b/lorie/src/main/java/com/termux/x11/LorieApp.java
+index 775026d..488d5e8 100644
+--- a/lorie/src/main/java/com/termux/x11/LorieApp.java
++++ b/lorie/src/main/java/com/termux/x11/LorieApp.java
+@@ -128,6 +128,7 @@ public class LorieApp extends Application {
+     public void onBroadcastReceive(Intent intent) {
+         String action = intent.getAction();
+         String extraTag = ACTION_START.equals(action) || MainActivity.ACTION_STOP.equals(action) || MainActivity.ACTION_CUSTOM.equals(action)
++                || MainActivity.ACTION_SET_TASK_DESCRIPTION.equals(action)
+                 ? intent.getStringExtra(CmdEntryPoint.EXTRA_DOCUMENT_TAG) : null;
+         String tag = extraTag == null ? "" : extraTag;
+         MainActivity activity = MainActivity.getInstance(tag);
+@@ -175,8 +176,14 @@ public class LorieApp extends Application {
+                 break;
+             }
+             case MainActivity.ACTION_STOP:
+-                if (activity != null)
++                if (activity != null) {
++                    activity.stopRequested = true;
+                     activity.finishAffinity();
++                }
++                break;
++            case MainActivity.ACTION_SET_TASK_DESCRIPTION:
++                if (activity != null)
++                    activity.applyTaskDescription(intent);
+                 break;
+             case ACTION_PREFERENCES_CHANGED:
+                 for (MainActivity a : MainActivity.getInstances()) {
+diff --git a/lorie/src/main/java/com/termux/x11/MainActivity.java b/lorie/src/main/java/com/termux/x11/MainActivity.java
+index e18c186..708893d 100644
+--- a/lorie/src/main/java/com/termux/x11/MainActivity.java
++++ b/lorie/src/main/java/com/termux/x11/MainActivity.java
+@@ -14,7 +14,10 @@ import android.app.PictureInPictureParams;
+ import android.content.ClipData;
+ import android.content.Context;
+ import android.content.ContextWrapper;
++import android.app.ActivityManager;
+ import android.content.Intent;
++import android.graphics.Bitmap;
++import android.graphics.BitmapFactory;
+ import android.content.pm.ActivityInfo;
+ import android.content.res.Configuration;
+ import android.content.res.Resources;
+@@ -33,6 +36,7 @@ import android.os.RemoteException;
+ import android.os.SystemClock;
+ import android.provider.Settings;
+ import android.util.DisplayMetrics;
++import android.util.Base64;
+ import android.util.Log;
+ import android.util.Rational;
+ import android.util.TypedValue;
+@@ -93,6 +97,15 @@ import java.util.TreeSet;
+ public class MainActivity extends AppCompatActivity {
+     public static final String ACTION_STOP = "com.termux.x11.ACTION_STOP";
+     public static final String ACTION_CUSTOM = "com.termux.x11.ACTION_CUSTOM";
++    // Sma26dex: per-window label/icon for the Android task (DeX caption, taskbar, recents)
++    public static final String ACTION_SET_TASK_DESCRIPTION = "com.termux.x11.ACTION_SET_TASK_DESCRIPTION";
++    public static final String EXTRA_TASK_LABEL = "s26_label";
++    public static final String EXTRA_TASK_ICON = "s26_icon";
++    public static final String EXTRA_TASK_ICON_B64 = "s26_icon_b64";
++    /** Set when the window is being closed by ACTION_STOP (the X server side), not by the user. */
++    boolean stopRequested = false;
++    private String taskLabel = null;
++    private Bitmap taskIcon = null;
+ 
+     public static Handler handler = new Handler();
+     private final Runnable connectRetry = this::tryConnect;
+@@ -310,6 +323,7 @@ public class MainActivity extends AppCompatActivity {
+         tag = parsedTag;
+ 
+         instances.put(tag, new WeakReference<>(this));
++        applyTaskDescription(getIntent());
+ 
+         prefs = app.getPrefs(this);
+         int modeValue = Integer.parseInt(prefs.touchMode.get()) - 1;
+@@ -415,11 +429,60 @@ public class MainActivity extends AppCompatActivity {
+     protected void onNewIntent(Intent intent) {
+         super.onNewIntent(intent);
+         setIntent(intent);
+-        relaunchAsTaggedIfNeeded(intent, false);
++        String newTag = relaunchAsTaggedIfNeeded(intent, false);
++        if (newTag != null && newTag.equals(tag))
++            applyTaskDescription(intent);
++    }
++
++    /** Sma26dex: applies EXTRA_TASK_LABEL / EXTRA_TASK_ICON(_B64) from an intent to this window's task. */
++    @SuppressWarnings("deprecation")
++    void applyTaskDescription(Intent intent) {
++        if (intent == null)
++            return;
++        String label = intent.getStringExtra(EXTRA_TASK_LABEL);
++        Bitmap icon = decodeTaskIcon(intent);
++        if ((label == null || label.isEmpty()) && icon == null)
++            return;
++        if (label != null && !label.isEmpty()) {
++            taskLabel = label;
++            setTitle(label);
++        }
++        if (icon != null)
++            taskIcon = icon;
++        try {
++            setTaskDescription(new ActivityManager.TaskDescription(taskLabel, taskIcon));
++        } catch (Exception e) {
++            Log.w("MainActivity", "setTaskDescription failed", e);
++        }
++    }
++
++    private static Bitmap decodeTaskIcon(Intent intent) {
++        try {
++            String b64 = intent.getStringExtra(EXTRA_TASK_ICON_B64);
++            if (b64 != null && !b64.isEmpty()) {
++                byte[] data = Base64.decode(b64, Base64.DEFAULT);
++                return BitmapFactory.decodeByteArray(data, 0, data.length);
++            }
++            String path = intent.getStringExtra(EXTRA_TASK_ICON);
++            if (path != null && !path.isEmpty())
++                return BitmapFactory.decodeFile(path);
++        } catch (Throwable t) {
++            Log.w("MainActivity", "Can not decode task icon", t);
++        }
++        return null;
+     }
+ 
+     @Override
+     protected void onDestroy() {
++        // Sma26dex: tell the X server of a "-tag" window that the user closed the window,
++        // so the program inside can be closed too instead of keeping running unseen.
++        if (isFinishing() && !isChangingConfigurations() && !stopRequested && !tag.isEmpty() && service != null) {
++            try {
++                service.windowClosed();
++            } catch (Exception e) {
++                Log.w("MainActivity", "windowClosed() failed", e);
++            }
++        }
+         handler.removeCallbacks(screenIdleTimeoutCheck);
+         handler.removeCallbacks(serverWatchdog);
+         if (mInputHandler != null)
+diff --git a/lorie/src/main/java/com/termux/x11/WindowsFileActivity.java b/lorie/src/main/java/com/termux/x11/WindowsFileActivity.java
+new file mode 100644
+index 0000000..2c63aa0
+--- /dev/null
++++ b/lorie/src/main/java/com/termux/x11/WindowsFileActivity.java
+@@ -0,0 +1,185 @@
++package com.termux.x11;
++
++import android.app.Activity;
++import android.content.Intent;
++import android.database.Cursor;
++import android.net.Uri;
++import android.os.Build;
++import android.os.Bundle;
++import android.provider.DocumentsContract;
++import android.provider.OpenableColumns;
++import android.text.TextUtils;
++import android.util.Log;
++import android.widget.Toast;
++
++import java.io.File;
++import java.io.FileOutputStream;
++import java.io.InputStream;
++import java.io.OutputStream;
++import java.util.List;
++import java.util.Locale;
++
++/**
++ * Sma26dex: lets file managers (e.g. Samsung My Files) open Windows programs.
++ * The file is handed to Termux as "s26dex open <path>" through Termux's RUN_COMMAND service,
++ * which decides how to run it (installers in the Wine desktop, other programs in their own window).
++ * The RUN_COMMAND permission is granted automatically to the sharedUid build because it shares
++ * Termux's user id; Termux also needs "allow-external-apps = true" in ~/.termux/termux.properties.
++ */
++public class WindowsFileActivity extends Activity {
++    private static final String TAG = "WindowsFileActivity";
++    private static final String TERMUX_PACKAGE = "com.termux";
++    private static final String TERMUX_PREFIX = "/data/data/com.termux/files/usr";
++    private static final String TERMUX_HOME = "/data/data/com.termux/files/home";
++    private static final String[] EXTENSIONS = {".exe", ".msi", ".bat", ".cmd", ".lnk", ".com"};
++
++    @Override
++    protected void onCreate(Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        try {
++            launch(getIntent());
++        } catch (Exception e) {
++            Log.e(TAG, "Can not open Windows program", e);
++            Toast.makeText(this, e.getMessage(), Toast.LENGTH_LONG).show();
++        }
++        finish();
++    }
++
++    @SuppressWarnings("deprecation")
++    private void launch(Intent intent) throws Exception {
++        Uri uri = intent == null ? null : intent.getData();
++        if (uri == null && intent != null && Intent.ACTION_SEND.equals(intent.getAction()))
++            uri = intent.getParcelableExtra(Intent.EXTRA_STREAM);
++        if (uri == null)
++            throw new Exception(getString(R.string.s26_no_file));
++
++        String name = displayName(uri);
++        if (!isWindowsProgram(name))
++            throw new Exception(getString(R.string.s26_not_windows_program, name));
++
++        String path = readablePath(uri, name);
++        if (path == null)
++            path = copyIntoTermux(uri, name);
++
++        startTermux(path, name);
++        Toast.makeText(this, getString(R.string.s26_starting, name), Toast.LENGTH_SHORT).show();
++    }
++
++    private static boolean isWindowsProgram(String name) {
++        String lower = name == null ? "" : name.toLowerCase(Locale.ROOT);
++        for (String ext : EXTENSIONS)
++            if (lower.endsWith(ext))
++                return true;
++        return false;
++    }
++
++    private String displayName(Uri uri) {
++        if ("content".equals(uri.getScheme())) {
++            try (Cursor c = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
++                if (c != null && c.moveToFirst() && !c.isNull(0))
++                    return c.getString(0);
++            } catch (Exception e) {
++                Log.w(TAG, "DISPLAY_NAME query failed", e);
++            }
++        }
++        String last = uri.getLastPathSegment();
++        if (last != null && last.contains("/"))
++            last = last.substring(last.lastIndexOf('/') + 1);
++        if (last != null && last.contains(":"))
++            last = last.substring(last.lastIndexOf(':') + 1);
++        return last == null ? "program.exe" : last;
++    }
++
++    /**
++     * Real file path for the uri when Termux can read it directly. Running the program from its own
++     * folder matters: most programs load DLLs and data files that sit next to the .exe.
++     */
++    private String readablePath(Uri uri, String name) {
++        if ("file".equals(uri.getScheme()))
++            return readable(uri.getPath());
++
++        // Many providers (including media and file manager providers) still expose the "_data" column.
++        try (Cursor c = getContentResolver().query(uri, new String[]{"_data"}, null, null, null)) {
++            if (c != null && c.moveToFirst() && !c.isNull(0)) {
++                String p = readable(c.getString(0));
++                if (p != null)
++                    return p;
++            }
++        } catch (Exception ignored) {}
++
++        // Storage Access Framework: content://com.android.externalstorage.documents/document/primary:Download/x.exe
++        try {
++            if (DocumentsContract.isDocumentUri(this, uri)
++                    && "com.android.externalstorage.documents".equals(uri.getAuthority())) {
++                String[] parts = DocumentsContract.getDocumentId(uri).split(":", 2);
++                String root = "primary".equalsIgnoreCase(parts[0]) ? "/storage/emulated/0" : "/storage/" + parts[0];
++                String p = readable(root + "/" + (parts.length > 1 ? parts[1] : ""));
++                if (p != null)
++                    return p;
++            }
++        } catch (Exception ignored) {}
++
++        // File manager providers usually embed the storage path in the uri, e.g.
++        // content://<provider>/device_storage/0/Download/x.exe or .../storage/emulated/0/Download/x.exe
++        List<String> seg = uri.getPathSegments();
++        for (int i = 0; i < seg.size(); i++) {
++            String rest = TextUtils.join("/", seg.subList(i, seg.size()));
++            if (!rest.endsWith(name))
++                continue;
++            for (String root : new String[]{"/storage/emulated/0/", "/storage/", "/"}) {
++                String p = readable(root + rest);
++                if (p != null)
++                    return p;
++            }
++        }
++        return null;
++    }
++
++    private static String readable(String path) {
++        if (path == null || path.isEmpty())
++            return null;
++        File f = new File(path);
++        return f.isFile() && f.canRead() ? f.getAbsolutePath() : null;
++    }
++
++    /** Fallback: copy the program into Termux's home (works for single-file installers). */
++    private String copyIntoTermux(Uri uri, String name) throws Exception {
++        File dir = new File(TERMUX_HOME, "Downloads/Windows");
++        File out = new File(dir, name.replace('/', '_'));
++        try {
++            if (!dir.isDirectory() && !dir.mkdirs())
++                throw new Exception("mkdir " + dir);
++            try (InputStream in = getContentResolver().openInputStream(uri);
++                 OutputStream os = new FileOutputStream(out)) {
++                if (in == null)
++                    throw new Exception("openInputStream");
++                byte[] buf = new byte[1 << 16];
++                int n;
++                while ((n = in.read(buf)) > 0)
++                    os.write(buf, 0, n);
++            }
++            return out.getAbsolutePath();
++        } catch (Exception e) {
++            Log.w(TAG, "copy failed", e);
++            throw new Exception(getString(R.string.s26_copy_failed, name));
++        }
++    }
++
++    private void startTermux(String path, String name) throws Exception {
++        Intent i = new Intent("com.termux.RUN_COMMAND");
++        i.setClassName(TERMUX_PACKAGE, "com.termux.app.RunCommandService");
++        i.putExtra("com.termux.RUN_COMMAND_PATH", TERMUX_PREFIX + "/bin/s26dex");
++        i.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", new String[]{"open", path});
++        i.putExtra("com.termux.RUN_COMMAND_WORKDIR", TERMUX_HOME);
++        i.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true);
++        i.putExtra("com.termux.RUN_COMMAND_COMMAND_LABEL", "s26dex open " + name);
++        try {
++            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
++                startForegroundService(i);
++            else
++                startService(i);
++        } catch (Exception e) {
++            throw new Exception(getString(R.string.s26_termux_failed, e.getMessage()));
++        }
++    }
++}
+diff --git a/lorie/src/main/res/values-ko/s26_strings.xml b/lorie/src/main/res/values-ko/s26_strings.xml
+new file mode 100644
+index 0000000..f63e712
+--- /dev/null
++++ b/lorie/src/main/res/values-ko/s26_strings.xml
+@@ -0,0 +1,9 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="s26_open_windows_program">Windows 프로그램 실행</string>
++    <string name="s26_no_file">열 파일이 없습니다.</string>
++    <string name="s26_not_windows_program">%1$s 은(는) Windows 프로그램(.exe, .msi, .bat, .cmd, .lnk)이 아닙니다.</string>
++    <string name="s26_starting">%1$s 실행 중…</string>
++    <string name="s26_copy_failed">Termux 에서 %1$s 을(를) 읽을 수 없습니다. Termux:X11 sharedUid 판을 설치하거나 termux-setup-storage 를 실행하세요.</string>
++    <string name="s26_termux_failed">Termux 를 시작할 수 없습니다: %1$s</string>
++</resources>
+diff --git a/lorie/src/main/res/values/s26_strings.xml b/lorie/src/main/res/values/s26_strings.xml
+new file mode 100644
+index 0000000..c07ca75
+--- /dev/null
++++ b/lorie/src/main/res/values/s26_strings.xml
+@@ -0,0 +1,9 @@
++<?xml version="1.0" encoding="utf-8"?>
++<resources>
++    <string name="s26_open_windows_program">Run Windows program</string>
++    <string name="s26_no_file">No file was given.</string>
++    <string name="s26_not_windows_program">%1$s is not a Windows program (.exe, .msi, .bat, .cmd, .lnk).</string>
++    <string name="s26_starting">Starting %1$s…</string>
++    <string name="s26_copy_failed">Can not read %1$s from Termux. Install the sharedUid build of Termux:X11, or run termux-setup-storage.</string>
++    <string name="s26_termux_failed">Can not start Termux: %1$s</string>
++</resources>
+-- 
+2.43.0
+

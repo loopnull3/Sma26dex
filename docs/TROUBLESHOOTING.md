@@ -24,7 +24,10 @@
 | Wine 업데이트 후 DXVK가 풀림 | `s26dex dxvk deploy` (Wine 이 프리픽스를 갱신하면서 DLL 을 덮어씀) |
 | 프리픽스를 완전히 초기화 | `s26dex kill && rm -rf ~/.wine-s26 && s26dex start` |
 | **DeX 창 모드** | |
-| DeX 창을 닫았는데 다시 실행하면 "이미 실행 중" | DeX ✕는 창만 닫습니다. 그 메시지와 함께 창이 다시 열립니다. 종료는 앱 안에서 하거나 `s26dex close <앱>` |
+| DeX ✕를 눌러도 앱이 계속 실행됨 | 공식 Termux:X11은 ✕ 신호를 주지 않습니다 → [패치판](../termux-x11/README.md) 설치. 그 전까지는 앱 안에서 종료하거나 `s26dex close <앱>` |
+| DeX 제목표시줄이 "Termux:X11" 로 나옴 | 패치판이 아닌 경우입니다. 패치판인데도 그러면 `s26dex close <앱>` 후 다시 실행 (아이콘: `~/.local/share/sma26dex/containers/<앱>/icon.png`) |
+| 내 파일에 "Windows 프로그램 실행" 이 없음 | 패치판 Termux:X11 필요. 파일 관리자가 exe 를 다른 형식으로 넘기면 "공유 → Windows 프로그램 실행" 사용 |
+| "Windows 프로그램 실행" 을 눌러도 아무 일 없음 | Termux 알림에 오류가 있으면 `allow-external-apps` 문제 → `./install.sh` 재실행. 로그: `~/.cache/sma26dex/logs/open-*.log`. sharedUid 판이 아니면 앱 설정 > 권한 > "Termux 환경에서 명령 실행" 허용 |
 | 앱 화면이 DeX 창보다 작고 가운데에 있음 | 크기가 고정된 창입니다(앱이 크기 조절을 막음). 정상 동작입니다 |
 | 앱 화면 아래에 15~22px 빈 줄 | 앱 컨테이너의 Win32 제목 지표가 적용되지 않은 상태 → `s26dex close <앱>` 후 `s26dex app reset <앱>` |
 | 설치한 프로그램이 DeX 창에서 "설정이 없다"며 실행 안 됨 | 컨테이너를 설치 전에 만든 경우 → `s26dex app reset <앱>` |

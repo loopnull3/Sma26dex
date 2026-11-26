@@ -45,6 +45,16 @@ ln -sf "$PWD/bin/s26dex" "$PREFIX/bin/s26dex"
 have termux-fix-shebang && termux-fix-shebang bin/s26dex || true
 ok "$(command -v s26dex)"
 
+# 패치판 Termux:X11 의 "내 파일에서 exe/msi 열기" 가 Termux RUN_COMMAND 를 쓰려면 필요
+TP="$HOME/.termux/termux.properties"
+mkdir -p "$HOME/.termux"; touch "$TP"
+if ! grep -Eq '^[[:space:]]*allow-external-apps[[:space:]]*=[[:space:]]*true' "$TP"; then
+  sed -i '/^[[:space:]]*allow-external-apps[[:space:]]*=/d' "$TP"
+  echo "allow-external-apps = true" >> "$TP"
+  have termux-reload-settings && termux-reload-settings || true
+  ok "Termux: allow-external-apps = true (내 파일에서 exe/msi 열기용)"
+fi
+
 info "4/5 GPU / CPU 탐지"
 detect_device
 

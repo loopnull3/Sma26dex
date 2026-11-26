@@ -221,6 +221,25 @@ config_set() {
   return 0
 }
 
+# exe 의 아이콘 리소스 → PNG
+# 후보 순서: max 이하 중 큰 것·색 깊이 높은 것 → max 초과 중 작은 것. 손상된 항목이 있어서 성공할 때까지 차례로 시도.
+extract_icon() { # exe png [max=256]
+  have wrestool && have icotool || return 1
+  local t ico idx max="${3:-256}"
+  t="$(mktemp -d)" || return 1
+  wrestool -x -t 14 "$1" -o "$t/" >/dev/null 2>&1
+  for ico in $(find "$t" -name '*.ico' | sort); do
+    for idx in $(icotool -l "$ico" 2>/dev/null |
+        sed -n 's/.*--index=\([0-9]*\) --width=\([0-9]*\) .*--bit-depth=\([0-9]*\).*/\2 \3 \1/p' |
+        awk -v m="$max" '{ if ($1 <= m) print 0, -$1, -$2, $3; else print 1, $1, -$2, $3 }' |
+        sort -k1,1n -k2,2n -k3,3n | awk '{print $4}'); do
+      icotool -x --index="$idx" -o "$2" "$ico" >/dev/null 2>&1 && [ -s "$2" ] && { rm -rf "$t"; return 0; }
+    done
+  done
+  rm -rf "$t"
+  return 1
+}
+
 korean_font_family() {
   have fc-list || return 1
   local all f

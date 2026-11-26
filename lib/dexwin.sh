@@ -72,7 +72,7 @@ container_tune() { # slug — 현재 DISPLAY 에서 컨테이너 wine 으로 레
 dex_load_state() { # slug → DEX_* 변수
   local f; f="$(container_state "$1")"
   # shellcheck disable=SC2034  # XPID/OBPID/FITPID 는 상태 파일 기록용(문제 해결 시 확인)
-  DEX_DISPLAY="" DEX_TAG="" DEX_XPID="" DEX_OBPID="" DEX_FITPID="" DEX_SUPPID=""
+  DEX_DISPLAY="" DEX_TAG="" DEX_XPID="" DEX_OBPID="" DEX_FITPID="" DEX_SUPPID="" DEX_LABEL=""
   # shellcheck disable=SC1090
   [ -f "$f" ] && . "$f"
   [ -n "$DEX_SUPPID" ]
@@ -106,19 +106,36 @@ dex_reserve_display() { # stdout: 번호
   return 1
 }
 
-dex_show() { # slug
-  dex_load_state "$1" || return 1
-  am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity -d "$DEX_TAG" >/dev/null 2>&1
+# DeX 창(Android 작업)의 이름·아이콘 — Sma26dex 패치판 Termux:X11 이 TaskDescription 으로 적용
+# (원본 Termux:X11 은 이 extra 를 무시하므로 해가 없음)
+dex_task_extras() { # label icon.png → am 인자 출력 (NUL 구분)
+  [ -n "$1" ] && printf '%s\0' --es s26_label "$1"
+  if [ -s "$2" ] && [ "$(wc -c < "$2")" -lt 200000 ]; then
+    printf '%s\0' --es s26_icon_b64 "$(base64 -w0 "$2")"
+  fi
 }
 
-# 앱 본창: 클라이언트 목록 순서상 첫 번째 "일반 창 + 소유자 없음 + 제목표시줄 있음"
+dex_open_window() { # tag label icon
+  local extra=()
+  mapfile -d '' -t extra < <(dex_task_extras "$2" "$3")
+  am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity -d "$1" "${extra[@]}" >/dev/null 2>&1
+}
+
+dex_show() { # slug
+  dex_load_state "$1" || return 1
+  dex_open_window "$DEX_TAG" "$DEX_LABEL" "$(container_dir "$1")/icon.png"
+}
+
+# 앱 본창: 클라이언트 목록 순서상 첫 번째 "일반 창 + 소유자 없음 + (제목표시줄 있음 또는 전체화면)"
+# 제목표시줄 없는 일반 창은 대개 스플래시 화면이라 제외. 이미 DeX 창을 꽉 채운 창은 Wine 이 FULLSCREEN 으로 표시.
 dex_main_window() {
   local d="$1" w p top
   for w in $(DISPLAY="$d" xprop -root _NET_CLIENT_LIST 2>/dev/null | grep -o '0x[0-9a-f]*'); do
-    p="$(DISPLAY="$d" xprop -id "$w" _NET_WM_WINDOW_TYPE WM_TRANSIENT_FOR _NET_FRAME_EXTENTS 2>/dev/null)"
+    p="$(DISPLAY="$d" xprop -id "$w" _NET_WM_WINDOW_TYPE WM_TRANSIENT_FOR _NET_FRAME_EXTENTS _NET_WM_STATE 2>/dev/null)"
     case "$p" in *_NET_WM_WINDOW_TYPE_NORMAL*) ;; *) continue ;; esac
     case "$p" in *"WM_TRANSIENT_FOR(WINDOW)"*) continue ;; esac
     top="$(printf '%s\n' "$p" | sed -n 's/^_NET_FRAME_EXTENTS(CARDINAL) = [0-9]*, [0-9]*, \([0-9]*\),.*/\1/p')"
+    case "$p" in *_NET_WM_STATE_FULLSCREEN*) top=1 ;; esac
     [ "${top:-0}" -gt 0 ] || continue
     echo "$w"
     return 0
@@ -144,8 +161,12 @@ dex_fixed_size() {
 # EWMH static gravity(10) 로 클라이언트 좌표를 지정하므로 WM 제목표시줄은 화면 위쪽 밖으로 나간다.
 # Wine 이 직전 상태를 다시 적용하며 한두 번 되돌릴 수 있어서, 맞을 때까지 매 주기 다시 요청한다.
 # 크기 고정 창은 가운데 정렬.
-dex_fit_loop() {
-  local d="$1" main="" sz cur w h fixed
+dex_window_title() { # display win → Windows 창 제목
+  DISPLAY="$1" xprop -id "$2" -notype _NET_WM_NAME 2>/dev/null | sed -n 's/^_NET_WM_NAME = "\(.*\)"$/\1/p' | sed 's/\\"/"/g'
+}
+
+dex_fit_loop() { # display tag
+  local d="$1" tag="${2:-}" main="" sz cur w h fixed title shown=""
   while sleep "$S26_DEX_FIT_INTERVAL"; do
     sz="$(DISPLAY="$d" xrandr 2>/dev/null | awk '/current/{gsub(",","");print $8"x"$10; exit}')"
     [ -n "$sz" ] || continue
@@ -153,6 +174,15 @@ dex_fit_loop() {
       main="$(dex_main_window "$d")" || main=""
     fi
     [ -n "$main" ] || continue
+    # Windows 창 제목이 바뀌면 DeX 제목표시줄/작업표시줄 이름도 바꿈 (예: "문서1 - 메모장")
+    if [ -n "$tag" ]; then
+      title="$(dex_window_title "$d" "$main")"
+      if [ -n "$title" ] && [ "$title" != "$shown" ]; then
+        am broadcast -a com.termux.x11.ACTION_SET_TASK_DESCRIPTION -p com.termux.x11 \
+          --es document_tag "$tag" --es s26_label "$title" >/dev/null 2>&1
+        shown="$title"
+      fi
+    fi
     case "$(DISPLAY="$d" xprop -id "$main" _NET_WM_STATE 2>/dev/null)" in
       *FULLSCREEN*|*HIDDEN*) continue ;;   # 전체화면 게임/최소화는 건드리지 않음
     esac
@@ -180,8 +210,10 @@ dex_prefs() {
 # dex_launch <slug> <명령...>  — 현재 셸 환경(WINE*, FEX_*, DXVK_* 등)을 그대로 사용
 dex_launch() {
   local slug="$1"; shift
-  local n tag xpid obpid fitpid rc
+  local n tag xpid obpid fitpid rc label icon
   mkdir -p "$(container_dir "$slug")"
+  label="${S26_DEX_LABEL:-$slug}"
+  icon="$(container_dir "$slug")/icon.png"
 
   if dex_is_running "$slug"; then
     info "이미 실행 중 — DeX 창을 앞으로 가져옵니다 (:$DEX_DISPLAY)"
@@ -192,10 +224,15 @@ dex_launch() {
   n="$(dex_reserve_display)" || die "빈 X 디스플레이 번호가 없습니다 ($S26_DEX_DISPLAY_BASE~99)."
   tag="s26-$slug"
   info "DeX 창 열기: $tag (:$n)"
+  # 패치판 Termux:X11: 사용자가 DeX 창을 닫으면(✕, Alt+F4) 이 명령을 실행 → 앱에 닫기 요청
+  # 앱이 뜨기 전(프리픽스 생성 중 등)에 닫히면 기록해 뒀다가 앱이 뜬 뒤 닫기 요청
+  DEX_CLOSED_EARLY=0
+  trap 'DEX_CLOSED_EARLY=1' USR1
   # shellcheck disable=SC2086
-  nohup termux-x11 ":$n" -tag "$tag" $S26_X11_ARGS >"$S26_LOG_DIR/x11-$slug.log" 2>&1 &
+  TERMUX_X11_WINDOW_CLOSED_CMD="kill -USR1 $$" \
+    nohup termux-x11 ":$n" -tag "$tag" $S26_X11_ARGS >"$S26_LOG_DIR/x11-$slug.log" 2>&1 &
   xpid=$!
-  am start --user 0 -n com.termux.x11/com.termux.x11.MainActivity -d "$tag" >/dev/null 2>&1
+  dex_open_window "$tag" "$label" "$icon"
   S26_DISPLAY=":$n" wait_x11 || { kill "$xpid" 2>/dev/null; rm -rf "$(dex_lock_dir "$n")"; die "X 서버(:$n) 응답 없음 — $S26_LOG_DIR/x11-$slug.log"; }
   dex_prefs
 
@@ -209,26 +246,54 @@ dex_launch() {
   export WINEPREFIX; WINEPREFIX="$(container_prefix "$slug")"
   export DISPLAY=":$n"
   container_tune "$slug"
-  dex_fit_loop ":$n" &
+  dex_fit_loop ":$n" "$tag" &
   fitpid=$!
 
-  cat > "$(container_state "$slug")" <<EOF
-DEX_DISPLAY=$n
-DEX_TAG=$tag
-DEX_XPID=$xpid
-DEX_OBPID=$obpid
-DEX_FITPID=$fitpid
-DEX_SUPPID=$$
-EOF
+  {
+    printf 'DEX_DISPLAY=%q\nDEX_TAG=%q\nDEX_XPID=%q\nDEX_OBPID=%q\n' "$n" "$tag" "$xpid" "$obpid"
+    printf 'DEX_FITPID=%q\nDEX_SUPPID=%q\nDEX_LABEL=%q\n' "$fitpid" "$$" "$label"
+  } > "$(container_state "$slug")"
 
   # shellcheck disable=SC2064
   trap "dex_cleanup '$slug' '$tag' '$xpid' '$obpid' '$fitpid' '$n'" EXIT
   trap 'exit 130' INT TERM HUP
 
-  "$@"
-  rc=$?
+  "$@" &
+  DEX_APP_PID=$!
+  DEX_CUR_SLUG="$slug" DEX_CUR_TAG="$tag" DEX_CUR_LABEL="$label" DEX_CUR_ICON="$icon" DEX_CUR_DISPLAY=":$n"
+  trap dex_on_window_closed USR1
+  if [ "$DEX_CLOSED_EARLY" = 1 ]; then sleep 3; dex_on_window_closed; fi
+  while :; do
+    wait "$DEX_APP_PID"
+    rc=$?
+    kill -0 "$DEX_APP_PID" 2>/dev/null || break   # USR1 로 wait 가 끊긴 경우엔 계속 기다림
+  done
+  # 신호로 끊긴 wait 의 값(128+n) 대신 앱의 실제 종료 코드
+  if [ "$rc" -gt 128 ]; then wait "$DEX_APP_PID" 2>/dev/null; rc=$?; fi
+  trap - USR1
   "$(wineserver_bin)" -w 2>/dev/null   # 앱이 띄운 다른 프로세스까지 끝날 때까지
   return "$rc"
+}
+
+# 사용자가 DeX 창을 닫음(✕ / Alt+F4) → Windows 처럼 앱에 닫기 요청(WM_CLOSE).
+# 4초 뒤에도 창이 남아 있으면(저장 확인 등) DeX 창을 다시 열어 답할 수 있게 함.
+# 창 없이 계속 도는 앱(트레이 상주)은 그대로 둔다 — Windows 와 같은 동작.
+dex_on_window_closed() {
+  local w _
+  info "DeX 창이 닫힘 → $DEX_CUR_SLUG 에 닫기 요청"
+  for w in $(DISPLAY="$DEX_CUR_DISPLAY" xprop -root _NET_CLIENT_LIST 2>/dev/null | grep -o '0x[0-9a-f]*'); do
+    DISPLAY="$DEX_CUR_DISPLAY" wmctrl -i -c "$w" 2>/dev/null
+  done
+  for _ in 1 2 3 4; do
+    sleep 1
+    kill -0 "$DEX_APP_PID" 2>/dev/null || return 0
+  done
+  if DISPLAY="$DEX_CUR_DISPLAY" xprop -root _NET_CLIENT_LIST 2>/dev/null | grep -q '0x'; then
+    info "$DEX_CUR_SLUG 이(가) 응답을 기다림(저장 확인 등) → DeX 창을 다시 엽니다"
+    dex_open_window "$DEX_CUR_TAG" "$DEX_CUR_LABEL" "$DEX_CUR_ICON"
+  else
+    info "$DEX_CUR_SLUG 은(는) 창 없이 계속 실행 중(트레이). 다시 열기: s26dex show $DEX_CUR_SLUG"
+  fi
 }
 
 dex_cleanup() { # slug tag xpid obpid fitpid display
