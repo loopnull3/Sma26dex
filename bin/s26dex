@@ -120,17 +120,40 @@ dxvk_deploy() {
   ok "DXVK 적용: system32(x64) / syswow64(x86)  — 오버라이드는 run 시 x86/x64 앱에만 적용"
 }
 
+# 프리픽스가 끝까지 만들어졌는지: wineboot 가 정상 종료한 뒤 남기는 표시 + 핵심 파일
+prefix_ready() {
+  [ -f "$S26_WINEPREFIX/.s26-ready" ] && [ -f "$S26_WINEPREFIX/system.reg" ] &&
+    [ -f "$S26_WINEPREFIX/drive_c/windows/system32/kernel32.dll" ]
+}
+
 ensure_prefix() {
-  if [ ! -f "$S26_WINEPREFIX/system.reg" ]; then
-    info "Wine 프리픽스 생성: $S26_WINEPREFIX (최초 1회, 1~3분)"
-    ( wine_base_env; WINEDLLOVERRIDES="mscoree=;mshtml=" "$(wine_bin)" wineboot -i ) \
+  if ! prefix_ready; then
+    local mode=-i
+    if [ -f "$S26_WINEPREFIX/system.reg" ]; then
+      mode=-u
+      info "Wine 프리픽스가 끝까지 만들어지지 않았습니다 → 복구 (1~5분): $S26_WINEPREFIX"
+    else
+      info "Wine 프리픽스 생성: $S26_WINEPREFIX (최초 1회, 폰에서 3~5분)"
+    fi
+    ( wine_base_env; WINEDLLOVERRIDES="mscoree=;mshtml=" "$(wine_bin)" wineboot "$mode" ) \
       >"$S26_LOG_DIR/wineboot.log" 2>&1 || warn "wineboot 경고 — $S26_LOG_DIR/wineboot.log 확인"
     ( wine_base_env; "$(wineserver_bin)" -w )
+    [ -f "$S26_WINEPREFIX/drive_c/windows/system32/kernel32.dll" ] ||
+      die "Wine 프리픽스를 만들지 못했습니다 — 로그: $S26_LOG_DIR/wineboot.log"
     ( wine_base_env
       # 게임 전체화면 시 마우스가 창 밖으로 나가지 않게
       wine_reg 'HKCU\Software\Wine\X11 Driver' /v GrabFullscreen /t REG_SZ /d Y
-      apply_korean_fonts )
-    ok "프리픽스 생성 완료"
+      apply_korean_fonts
+      "$(wineserver_bin)" -w )
+    touch "$S26_WINEPREFIX/.s26-ready"
+    # 불완전한 프리픽스에서 복사된 앱 컨테이너 레지스트리는 다시 맞춤 (실행 중인 것은 제외)
+    local c slug
+    for c in "$S26_CONTAINERS"/*/prefix; do
+      [ -f "$c/system.reg" ] || continue
+      slug="$(basename "$(dirname "$c")")"
+      dex_is_running "$slug" || container_copy_registry "$slug"
+    done
+    ok "프리픽스 준비 완료"
   fi
   if ! dxvk_deployed && [ -d "$(dxvk_dir)" ]; then dxvk_deploy; fi
 }
@@ -491,7 +514,9 @@ cmd_doctor() {
   df -h "$HOME" 2>/dev/null | tail -1 | awk '{print "  남은 공간: "$4}'
 
   echo "== Wine"
-  [ -f "$S26_WINEPREFIX/system.reg" ] && ok "프리픽스: $S26_WINEPREFIX" || warn "프리픽스 없음 (s26dex start 시 생성)"
+  if prefix_ready; then ok "프리픽스: $S26_WINEPREFIX"
+  elif [ -f "$S26_WINEPREFIX/system.reg" ]; then warn "프리픽스가 덜 만들어짐 → 다음 실행 때 자동 복구"
+  else warn "프리픽스 없음 (첫 실행 때 생성)"; fi
   dxvk_deployed && ok "DXVK 적용됨" || warn "DXVK 미적용 → s26dex dxvk install"
   [ "$bad" = 0 ] && ok "점검 완료: 문제 없음" || warn "위 경고 항목을 먼저 해결하세요."
 }

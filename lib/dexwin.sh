@@ -29,24 +29,29 @@ container_dir()    { echo "$S26_CONTAINERS/$1"; }
 container_prefix() { echo "$S26_CONTAINERS/$1/prefix"; }
 container_state()  { echo "$S26_CONTAINERS/$1/run.env"; }
 
-# 메인 프리픽스의 레지스트리를 복사하고 drive_c 는 공유 (앱당 수 MB)
+# 메인 프리픽스와 맞춤: 레지스트리 복사(앱당 수 MB), C: 는 메인 drive_c 공유, 드라이브 연결(dosdevices) 재구성.
+# 메인 프리픽스가 덜 만들어졌을 때 복사된 컨테이너도 이걸로 복구된다.
 container_copy_registry() {
-  local c; c="$(container_prefix "$1")"
+  local c d; c="$(container_prefix "$1")"
+  mkdir -p "$c" || return 1
   cp -p "$S26_WINEPREFIX/system.reg" "$S26_WINEPREFIX/user.reg" "$S26_WINEPREFIX/userdef.reg" "$c/" || return 1
   [ -f "$S26_WINEPREFIX/.update-timestamp" ] && cp -p "$S26_WINEPREFIX/.update-timestamp" "$c/"
+  ln -sfn "$S26_WINEPREFIX/drive_c" "$c/drive_c"
+  rm -rf "$c/dosdevices"
+  if [ -d "$S26_WINEPREFIX/dosdevices" ]; then cp -a "$S26_WINEPREFIX/dosdevices" "$c/dosdevices"; else mkdir -p "$c/dosdevices"; fi
+  for d in "c:../drive_c" "z:/"; do
+    [ -e "$c/dosdevices/${d%%:*}:" ] || ln -sfn "${d#*:}" "$c/dosdevices/${d%%:*}:"
+  done
   rm -f "$c/.s26-tuned"   # 다음 실행 때 DeX 창 지표 다시 적용
   return 0
 }
 
 container_ensure() {
   local c; c="$(container_prefix "$1")"
-  [ -f "$c/system.reg" ] && return 0
+  if [ -f "$c/system.reg" ] && [ -e "$c/dosdevices/c:/windows/system32/kernel32.dll" ]; then return 0; fi
   [ -f "$S26_WINEPREFIX/system.reg" ] || { warn "메인 프리픽스가 없습니다."; return 1; }
-  mkdir -p "$c"
   container_copy_registry "$1" || return 1
-  ln -sfn "$S26_WINEPREFIX/drive_c" "$c/drive_c"
-  rm -rf "$c/dosdevices" && cp -a "$S26_WINEPREFIX/dosdevices" "$c/dosdevices"
-  ok "앱 컨테이너 생성: $1 (C: 드라이브 공유)"
+  ok "앱 컨테이너 준비: $1 (C: 드라이브 공유)"
 }
 
 # DeX 창 전용 Win32 지표 (앱 컨테이너에만 적용, 메인 프리픽스는 그대로)
