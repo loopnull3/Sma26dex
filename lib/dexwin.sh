@@ -18,6 +18,7 @@ S26_DEX_FIT_INTERVAL="${S26_DEX_FIT_INTERVAL:-1}"
 # 파일명 → 컨테이너 id (영소문자·숫자·하이픈)
 slugify() {
   local s="${1##*/}"
+  s="${s##*\\}"   # Windows 경로(C:\...\app.exe)도 파일명만
   s="${s%.*}"
   s="$(printf '%s' "$s" | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-' | tr -s '-' | sed 's/^-//;s/-$//')"
   [ -n "$s" ] || s="app$(printf '%s' "$1" | cksum | cut -d' ' -f1)"

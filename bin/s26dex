@@ -14,7 +14,8 @@ usage() {
   cat <<'EOF'
 사용법: s26dex <명령> [옵션]
 
-  run     [옵션] <파일.exe|.msi|.bat|.lnk> [인자...]
+  run     [옵션] <파일.exe|.msi|.bat|.lnk|이름> [인자...]
+          이름만 쓰면 Wine 기본 프로그램 (예: s26dex run notepad / winemine / regedit / taskmgr)
           기본: 앱마다 독립된 DeX 창으로 실행 (DeX 작업표시줄·Alt+Tab·창 크기 조절)
             --dex                 DeX 창 모드 (기본)
             --label <이름>        DeX 창/작업표시줄에 보일 이름 (기본: exe 이름)
@@ -246,8 +247,12 @@ cmd_run() {
       *) break ;;
     esac; shift
   done
-  [ $# -ge 1 ] || die "실행할 파일을 지정하세요: s26dex run game.exe"
+  [ $# -ge 1 ] || die "실행할 파일을 지정하세요. 예) s26dex run notepad   s26dex run ~/Download/setup.exe"
   local target="$1"; shift
+  # 경로 없이 이름만 주면 Wine 기본 프로그램 (notepad, winemine, regedit, taskmgr, winecfg, cmd, explorer ...)
+  if [ ! -e "$target" ] && [[ "$target" =~ ^[A-Za-z0-9_-]+(\.[Ee][Xx][Ee])?$ ]]; then
+    target="C:\\windows\\system32\\${target%.[Ee][Xx][Ee]}.exe"
+  fi
   # C:\... 경로는 메인 프리픽스의 실제 파일로 바꿔서 아키텍처 판별·DXVK·작업 폴더를 적용
   if [[ "$target" =~ ^[Cc]:[\\/] ]]; then
     local unixp="$S26_WINEPREFIX/drive_c/${target:3}"
@@ -261,6 +266,7 @@ cmd_run() {
   fi
   local arch; arch="$(pe_arch "$target")"
   local base="${target##*/}"
+  base="${base##*\\}"
   # 설치 프로그램은 메인 프리픽스(Wine 데스크톱)에서 실행해야 레지스트리가 모든 앱에 공유됨
   if [ -z "$mode" ]; then
     case "${base,,}" in
