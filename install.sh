@@ -45,8 +45,14 @@ pkg install -y \
 
 info "3/5 s26dex 명령 등록"
 chmod +x bin/s26dex
-ln -sf "$PWD/bin/s26dex" "$PREFIX/bin/s26dex"
-have termux-fix-shebang && termux-fix-shebang bin/s26dex || true
+# 저장소 파일(shebang)을 고치지 않고 실행 스크립트를 따로 둠 → git pull 이 막히지 않음.
+# bash 를 직접 지정하므로 termux-exec 가 없는 경로(RUN_COMMAND 등)에서도 실행됨.
+rm -f "$PREFIX/bin/s26dex"
+cat > "$PREFIX/bin/s26dex" <<WRAP
+#!$PREFIX/bin/bash
+exec "$PREFIX/bin/bash" "$PWD/bin/s26dex" "\$@"
+WRAP
+chmod 755 "$PREFIX/bin/s26dex"
 ok "$(command -v s26dex)"
 
 # 패치판 Termux:X11 의 "내 파일에서 exe/msi 열기" 가 Termux RUN_COMMAND 를 쓰려면 필요

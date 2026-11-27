@@ -24,6 +24,7 @@
 | Wine 업데이트 후 DXVK가 풀림 | `s26dex dxvk deploy` (Wine 이 프리픽스를 갱신하면서 DLL 을 덮어씀) |
 | 프리픽스를 완전히 초기화 | `s26dex kill && rm -rf ~/.wine-s26 && s26dex start` |
 | **DeX 창 모드** | |
+| `git pull`: "Your local changes to ... bin/s26dex would be overwritten" | 예전 `install.sh` 가 파일 첫 줄을 고쳐서 생김 → `git checkout -- bin/s26dex && git pull && ./install.sh` |
 | `CANNOT LINK EXECUTABLE ... cannot locate symbol "SSL_..."` (git/curl) | 패키지가 일부만 업데이트됨 → `pkg upgrade -y` 후 다시 실행 |
 | 패치판 APK 설치 시 "앱이 설치되지 않음" | `s26dex doctor` 의 "Termux:X11 패치판 설치 조건" 확인. ① 지금 Termux:X11 이 일반판이면 Android 가 sharedUid 판으로의 업데이트를 막으므로 **Termux:X11 삭제 후 설치** ② Termux 가 Play 스토어/F-Droid 판이면 서명이 달라 sharedUid 판 설치 불가 → GitHub판 Termux 로 교체(홈 백업) |
 | DeX ✕를 눌러도 앱이 계속 실행됨 | 공식 Termux:X11은 ✕ 신호를 주지 않습니다 → [패치판](../termux-x11/README.md) 설치. 그 전까지는 앱 안에서 종료하거나 `s26dex close <앱>` |
